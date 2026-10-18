@@ -262,6 +262,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
+		if isCodexCLI {
+			normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBody(normalized)
+			if contextErr != nil {
+				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"invalid websocket request payload",
+					contextErr,
+				)
+			}
+			if contextChanged {
+				normalized = normalizedBody
+			}
+		}
 		requestedReasoningEffort := CanonicalRequestedReasoningEffort(normalized, strings.TrimSpace(values[1].String()))
 		if next, policyErr := applyOpenAIWSReasoningEffortPolicy(normalized, hooks); policyErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, policyErr.Error(), policyErr)

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -258,6 +259,17 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		)
 	}
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
+
+	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	if isCodexCLI {
+		normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBody(responsesBody)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		if contextChanged {
+			responsesBody = normalizedBody
+		}
+	}
 
 	if account.UsesOpenAICodexProtocol() {
 		var reqBody map[string]any

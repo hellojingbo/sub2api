@@ -222,6 +222,22 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	if isCodexCLI {
+		// Codex CLI sends the environment context as a user input item. Rebuild
+		// its date/timezone from this server's current instant before any protocol
+		// or account-specific forwarding path serializes the request.
+		normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBody(body)
+		if contextErr != nil {
+			return nil, contextErr
+		}
+		if contextChanged {
+			body = normalizedBody
+			originalBody = normalizedBody
+			requestView = newOpenAIRequestView(body)
+			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
+			originalModel = reqModel
+		}
+	}
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow
 	if isCodexCLI {
 		codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
