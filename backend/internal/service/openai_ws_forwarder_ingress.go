@@ -89,6 +89,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if _, err := s.prepareCodexAccountIdentitySource(ctx, c, account); err != nil {
 		return err
 	}
+	stageCodexNativeSessionIdentity(c, account, getAPIKeyIDFromContext(c), gjson.GetBytes(firstClientMessage, "prompt_cache_key").String(), firstClientMessage)
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}

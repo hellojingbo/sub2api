@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -78,6 +79,12 @@ func TestCodexAccountIdentityNamespaceUsesStableCredentialSource(t *testing.T) {
 	// Local row IDs repeat across independent deployments, so they are not a
 	// safe fallback for upstream identity.
 	require.Empty(t, codexAccountIdentityNamespace(&Account{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth}))
+	oauthTokenA := &Account{ID: 40, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "oauth-token-a"}}
+	oauthTokenADuplicate := &Account{ID: 41, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "oauth-token-a"}}
+	oauthTokenB := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "oauth-token-b"}}
+	require.Equal(t, codexAccountIdentityNamespace(oauthTokenA), codexAccountIdentityNamespace(oauthTokenADuplicate))
+	require.NotEqual(t, codexAccountIdentityNamespace(oauthTokenA), codexAccountIdentityNamespace(oauthTokenB))
+	require.NotContains(t, codexAccountIdentityNamespace(oauthTokenA), "oauth-token-a")
 
 	setupTokenA := &Account{ID: 30, Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{"access_token": "setup-token-a"}}
 	setupTokenADuplicate := &Account{ID: 31, Platform: PlatformOpenAI, Type: AccountTypeSetupToken, Credentials: map[string]any{"access_token": "setup-token-a"}}
@@ -114,7 +121,7 @@ func TestCodexAccountIdentitySourceResolvesShadowAndOverwritesFailoverContext(t 
 		"token", true, "client-session", true,
 	)
 	require.NoError(t, err)
-	require.Equal(t, isolateOpenAIUpstreamSessionID(0, parent, "client-session"), req.Header.Get("session_id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(parent, 0, "session", "client-session"), req.Header.Get("session-id"))
 
 	next := &Account{ID: 19, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
 		"chatgpt_account_id": "other-account",
@@ -153,7 +160,7 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	first := build(account11)
 	firstAgain := build(account11)
 	second := build(account19)
-	for _, header := range []string{"session_id", "x-codex-installation-id", "thread-id", "x-codex-window-id", "x-client-request-id"} {
+	for _, header := range []string{"session-id", "x-codex-installation-id", "thread-id", "x-codex-window-id", "x-client-request-id"} {
 		require.NotEmpty(t, first.Get(header), header)
 		require.Equal(t, first.Get(header), firstAgain.Get(header), header)
 		require.NotEqual(t, first.Get(header), second.Get(header), header)
@@ -165,7 +172,7 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		"token", true, "client-session", true,
 	)
 	require.NoError(t, err)
-	require.Equal(t, httpRequest.Header.Get("session_id"), first.Get("session_id"), "HTTP and WS must derive the same identity from the raw client key")
+	require.Equal(t, httpRequest.Header.Get("session-id"), first.Get("session-id"), "HTTP and WS must derive the same identity from the raw client key")
 }
 
 func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T) {
@@ -227,4 +234,55 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		require.NotEqual(t, first.Get(header), second.Get(header), "account failover must rotate upstream identity: %s", header)
 	}
 	require.GreaterOrEqual(t, checked, 5, "test must exercise the real outbound identity surface")
+}
+
+func TestCodexNativeSessionIdentityUsesOfficialHeadersAndIsolatesAccounts(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.6-codex","prompt_cache_key":"downstream-session","client_metadata":{"session_id":"downstream-session","thread_id":"downstream-thread"}}`)
+	accounts := []*Account{
+		{ID: 11, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "upstream-a"}},
+		{ID: 19, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"chatgpt_account_id": "upstream-b"}},
+	}
+
+	build := func(account *Account) http.Header {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+		c.Request.Header.Set("session-id", "downstream-session")
+		c.Request.Header.Set("thread-id", "downstream-thread")
+		c.Request.Header.Set("x-client-request-id", "downstream-request")
+		stageCodexNativeSessionIdentity(c, account, 77, "downstream-session", body)
+		identity := resolveCodexNativeSessionIdentity(c, account, 77, "downstream-session", body)
+		headers := make(http.Header)
+		applyCodexNativeSessionHeaders(headers, identity)
+		return headers
+	}
+
+	first := build(accounts[0])
+	firstAgain := build(accounts[0])
+	second := build(accounts[1])
+	for _, name := range []string{"session-id", "thread-id", "x-client-request-id"} {
+		require.NotEmpty(t, first.Get(name), name)
+		require.Equal(t, first.Get(name), firstAgain.Get(name), name)
+		require.NotEqual(t, first.Get(name), second.Get(name), name)
+		require.NotContains(t, first.Get(name), "sub2api", name)
+		require.NotContains(t, second.Get(name), "sub2api", name)
+	}
+	require.Empty(t, first.Get("conversation_id"))
+	require.Empty(t, first.Get("session_id"))
+	_, err := uuid.Parse(first.Get("session-id"))
+	require.NoError(t, err)
+}
+
+func TestCodexNativeSessionIdentityHashesSub2APIInputWithoutNamespace(t *testing.T) {
+	account := &Account{ID: 44, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	identity := stageCodexNativeSessionIdentity(c, account, 0, "sub2api:downstream-session", nil)
+	require.NotNil(t, identity)
+	for _, value := range []string{identity.SessionID, identity.ThreadID, identity.RequestID} {
+		require.NotEmpty(t, value)
+		require.NotContains(t, value, "sub2api")
+	}
 }

@@ -179,6 +179,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			body = normalizedBody
 		}
 		reqStream = gjson.GetBytes(body, "stream").Bool()
+		stageCodexNativeSessionIdentity(c, account, getAPIKeyIDFromContext(c), gjson.GetBytes(body, "prompt_cache_key").String(), body)
 
 		accountScopedBody, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(body, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
 		if scopeErr != nil {
@@ -650,6 +651,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		}
 	}
 
+	var nativeSessionIdentity *codexNativeSessionIdentity
 	// OAuth 透传到 ChatGPT internal API 时补齐必要头。
 	if account.UsesOpenAICodexProtocol() {
 		// Current Codex OAuth HTTP no longer negotiates the legacy Responses
@@ -665,6 +667,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		// 先保存客户端原始值，再做 compact 补充，避免后续统一隔离时读到已处理的值。
 		clientSessionID := strings.TrimSpace(req.Header.Get("session_id"))
 		clientConversationID := strings.TrimSpace(req.Header.Get("conversation_id"))
+		nativeResponses := !isOpenAIResponsesCompactPath(c) && isCodexNativeResponsesIngress(c)
+		if nativeResponses {
+			nativeSessionIdentity = resolveCodexNativeSessionIdentity(c, codexAccountIdentitySource(c, account), apiKeyID, promptCacheKey, body)
+			clearCodexNativeSessionHeaders(req.Header)
+		}
 		if isOpenAIResponsesCompactPath(c) {
 			req.Header.Set("accept", "application/json")
 			if req.Header.Get("version") == "" {
@@ -679,17 +686,20 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		if req.Header.Get("originator") == "" {
 			req.Header.Set("originator", resolveCodexOutboundIdentity("").originator)
 		}
+		if nativeResponses {
+			clearCodexNativeSessionHeaders(req.Header)
+		}
 		// 用隔离后的 session 标识符覆盖客户端透传值，防止跨用户会话碰撞。
-		if clientSessionID == "" {
+		if clientSessionID == "" && !nativeResponses {
 			clientSessionID = promptCacheKey
 		}
-		if clientConversationID == "" {
+		if clientConversationID == "" && !nativeResponses {
 			clientConversationID = promptCacheKey
 		}
-		if clientSessionID != "" {
+		if clientSessionID != "" && !nativeResponses {
 			req.Header.Set("session_id", isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), clientSessionID))
 		}
-		if clientConversationID != "" {
+		if clientConversationID != "" && !nativeResponses {
 			req.Header.Set("conversation_id", isolateOpenAIUpstreamSessionID(apiKeyID, codexAccountIdentitySource(c, account), clientConversationID))
 		}
 	} else if isOpenAIResponsesCompactPath(c) {
@@ -708,6 +718,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 		req.Header.Set("user-agent", CodexCanonicalUserAgent())
 	}
 	applyCodexAccountIdentityHeaders(req.Header, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
+	if nativeSessionIdentity != nil {
+		applyCodexNativeSessionHeaders(req.Header, nativeSessionIdentity)
+	}
 
 	// 指纹收敛：使用 forwardOpenAIPassthrough 中预计算的收敛 ID 改写出站头，
 	// 与请求体 client_metadata 共享同一份 IDs（与非透传路径相同的相对位置：

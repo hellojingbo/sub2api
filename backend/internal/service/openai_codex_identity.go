@@ -32,7 +32,7 @@ func NormalizeCodexClientVersion(version string) string {
 	return version
 }
 
-// buildCodexCLIUserAgent 按版本号拼出规范 Codex TUI User-Agent。
+// buildCodexCLIUserAgent 按版本号拼出规范 Codex CLI User-Agent。
 // UA 形态只在 codexCLIUserAgentSuffix 一处定义，避免多处拼装漂移。
 func buildCodexCLIUserAgent(version string) string {
 	if version = NormalizeCodexClientVersion(version); version == "" {
@@ -115,7 +115,13 @@ func codexCanonicalUserAgent() string {
 	codexCanonicalUAMu.RUnlock()
 	if resolver != nil {
 		if ua := resolver(); strings.TrimSpace(ua) != "" {
-			return ua
+			if _, _, ok := openai.PairCodexClientIdentity(ua); !ok {
+				return codexCLIUserAgent
+			}
+			// The settings resolver may still contain a historical TUI or
+			// desktop fingerprint. The native OAuth wire identity is always the
+			// CLI shape; only the synchronized version is reused here.
+			return buildCodexCLIUserAgent(codexClientVersionFromUA(ua))
 		}
 	}
 	return codexCLIUserAgent
@@ -131,7 +137,7 @@ type codexOutboundIdentity struct {
 }
 
 // resolveCodexOutboundIdentity 由候选 User-Agent 推导自洽的出站身份。
-// candidateUA 为空时使用规范 User-Agent；推导不出官方身份时整体回退为规范 TUI 身份。
+// candidateUA 为空时使用固定的规范 CLI User-Agent；推导不出官方身份时整体回退为该 CLI 身份。
 //
 // 候选 UA（面板 / 账号级的管理员显式配置）只贡献客户端名与 OS / 架构 / 终端指纹，
 // 其自带的版本段一律用当前生效版本重建：一条填写于某个历史版本的 UA 否则会把出站身份

@@ -33,7 +33,7 @@ const (
 	openaiPlatformAPIURL            = "https://api.openai.com/v1/responses"
 	openaiPlatformAPIInputTokensURL = "https://api.openai.com/v1/responses/input_tokens"
 	openaiStickySessionTTL          = time.Hour // 粘性会话TTL
-	// 与真实 Codex TUI 的 User-Agent 结构对齐：
+	// 与真实 Codex CLI 的 User-Agent 结构对齐：
 	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
 	// 缺少 OS/架构/终端后缀的形态易被上游指纹识别为非官方客户端。
 	// 该后缀是 UA 形态的唯一定义处，buildCodexCLIUserAgent 按运行时版本号复用它。
@@ -75,6 +75,9 @@ var openaiAllowedHeaders = map[string]bool{
 	"accept-language":         true,
 	"content-type":            true,
 	"conversation_id":         true,
+	"session-id":              true,
+	"thread-id":               true,
+	"x-client-request-id":     true,
 	"openai-beta":             true,
 	"user-agent":              true,
 	"originator":              true,
@@ -94,6 +97,9 @@ var openaiPassthroughAllowedHeaders = map[string]bool{
 	"accept-language":         true,
 	"content-type":            true,
 	"conversation_id":         true,
+	"session-id":              true,
+	"thread-id":               true,
+	"x-client-request-id":     true,
 	"openai-beta":             true,
 	"user-agent":              true,
 	"originator":              true,

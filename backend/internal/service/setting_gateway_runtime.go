@@ -500,7 +500,7 @@ func (s *SettingService) InvalidateClaudeCodeClientVersionCache() {
 }
 
 // GetOpenAICodexCanonicalUserAgent 返回出站规范 Codex User-Agent。
-// 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex TUI UA。
+// 未填面板 UA 时按当前生效的客户端版本号拼出标准 Codex CLI UA。
 //
 // 面板 UA 只贡献客户端名与 OS / 架构 / 终端指纹，版本段一律用生效版本重建：该输入框是
 // 唯一能改 UA 后缀的地方，但它填写于某个历史版本，逐字沿用会把出站身份永久钉死在陈旧
