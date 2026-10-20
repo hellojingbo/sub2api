@@ -74,6 +74,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 	defaultMappedModel string,
 	compatPromptCacheTenantIsolated bool,
 ) (*OpenAIForwardResult, error) {
+	auditDownstreamBody := append([]byte(nil), body...)
 	rememberOpenCodeInboundBody(c, body)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
@@ -368,6 +369,7 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 		}
 		upstreamReq.Header.Set("session_id", generateSessionUUID(sessionKey))
 	}
+	upstreamReq = s.attachGatewayRequestAudit(upstreamReq, c, account, auditDownstreamBody, "http")
 
 	// 7. Send request
 	proxyURL := ""

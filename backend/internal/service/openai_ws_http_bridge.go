@@ -518,6 +518,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		if err := applyMappedGPT55LiteCompatibility(upstreamReq, account, requestBody); err != nil {
 			return nil, err
 		}
+		upstreamReq = s.attachGatewayRequestAudit(upstreamReq, c, account, payload, "ws-http-bridge")
 		return upstreamReq, nil
 	}
 	if account.Platform == PlatformGrok {

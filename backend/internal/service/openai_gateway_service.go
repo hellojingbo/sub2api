@@ -474,6 +474,7 @@ type OpenAIGatewayService struct {
 	balanceNotifyService  *BalanceNotifyService
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	gatewayRequestAudit   *GatewayRequestAuditService
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -514,6 +515,16 @@ type OpenAIGatewayService struct {
 	// 剥离跨账号回带（openai_codex_turn_state.go）。
 	openaiCodexTurnStateOrigins sync.Map
 	openaiCodexTurnStateWrites  atomic.Uint64
+}
+
+// SetGatewayRequestAuditService attaches the manually controlled request
+// capture service after gateway construction. Capture is best-effort and is
+// disabled whenever no session is active.
+func (s *OpenAIGatewayService) SetGatewayRequestAuditService(audit *GatewayRequestAuditService) {
+	if s == nil {
+		return
+	}
+	s.gatewayRequestAudit = audit
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

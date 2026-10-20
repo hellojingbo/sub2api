@@ -22,6 +22,7 @@ func (s *OpenAIGatewayService) doOpenAIUpstream(request *http.Request, proxyURL 
 		}
 		response, handled, err := s.pluginManager.RoundTripOpenAIOAuth(request.Context(), request, proxyURL, account)
 		if handled {
+			CaptureGatewayRequestAudit(request)
 			return response, err
 		}
 	}

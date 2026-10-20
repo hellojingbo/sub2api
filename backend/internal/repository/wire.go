@@ -89,6 +89,7 @@ var ProviderSet = wire.NewSet(
 	NewSettingRepository,
 	NewOpsRepository,
 	NewAuditLogRepository,
+	NewGatewayRequestAuditStore,
 	NewPasskeyRepository,
 	NewPasskeySessionStore,
 	NewUserSubscriptionRepository,

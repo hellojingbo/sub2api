@@ -970,7 +970,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	var rejectedFieldRetryState *openAIResponsesRejectedFieldRetryState
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, downstreamPayload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, requestedReasoningEffort *string) (*OpenAIForwardResult, error) {
 		responseModelObserver := &upstreamResponseModelObserver{}
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
@@ -983,6 +983,25 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				fmt.Errorf("write upstream websocket request: %w", err),
 				false,
 			)
+		}
+		if s.gatewayRequestAudit != nil {
+			downstreamHeaders := map[string][]string{}
+			if c != nil && c.Request != nil {
+				downstreamHeaders = cloneGatewayAuditHeaders(c.Request.Header)
+			}
+			draft := GatewayRequestAuditDraft{
+				Transport:         "websocket",
+				AccountID:         account.ID,
+				AccountName:       account.Name,
+				DownstreamMethod:  "WS",
+				DownstreamHeaders: downstreamHeaders,
+				DownstreamBody:    append([]byte(nil), downstreamPayload...),
+			}
+			if c != nil && c.Request != nil {
+				draft.DownstreamURL = c.Request.URL.RequestURI()
+				draft.RequestID = c.Writer.Header().Get("X-Request-ID")
+			}
+			s.gatewayRequestAudit.RecordWebSocket(context.Background(), draft, wsURL, cloneGatewayAuditHeaders(baseAcquireReq.Headers), payload)
 		}
 		if debugEnabled {
 			logOpenAIWSModeDebug(
@@ -1822,7 +1841,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize, currentRequestedReasoningEffort)
+		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentClientPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize, currentRequestedReasoningEffort)
 		if relayErr != nil {
 			lastTurnClean = false
 			if isOpenAIWSSessionPreempted(ctx) {

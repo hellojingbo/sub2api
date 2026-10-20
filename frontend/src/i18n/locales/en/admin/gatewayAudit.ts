@@ -1,0 +1,50 @@
+export default {
+  gatewayAudit: {
+    title: 'Gateway Request Capture',
+    description: 'Manually capture downstream requests and the upstream requests actually sent, then compare headers and bodies.',
+    start: 'Start capture',
+    stop: 'Stop capture',
+    clear: 'Delete results',
+    active: 'Capturing',
+    stopped: 'Stopped',
+    idle: 'Idle',
+    session: 'Capture session',
+    count: 'Requests',
+    bytes: 'Data',
+    startedAt: 'Started',
+    stoppedAt: 'Stopped',
+    empty: 'No capture results. Start a session to collect new gateway requests.',
+    loadFailed: 'Unable to load request capture',
+    startFailed: 'Unable to start capture',
+    stopFailed: 'Unable to stop capture',
+    clearFailed: 'Unable to delete capture results',
+    startHint: 'Requests will be recorded until you stop the session.',
+    clearConfirm: 'Delete the current capture results? This cannot be undone.',
+    columns: {
+      time: 'Time',
+      transport: 'Transport',
+      downstream: 'Downstream request',
+      upstream: 'Upstream request',
+      account: 'Account',
+      detail: 'Details'
+    },
+    detail: {
+      title: 'Request capture details',
+      downstream: 'Downstream request',
+      upstream: 'Upstream request',
+      headers: 'Header comparison',
+      downstreamHeader: 'Downstream value',
+      upstreamHeader: 'Upstream value',
+      body: 'Body',
+      wireBody: 'Encoded wire body',
+      method: 'Method',
+      url: 'URL',
+      transport: 'Transport',
+      account: 'Account',
+      requestId: 'Request ID',
+      capturedAt: 'Captured',
+      missing: '—',
+      base64: 'Base64 content'
+    }
+  }
+}

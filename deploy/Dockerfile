@@ -83,6 +83,9 @@ RUN VERSION_VALUE="${VERSION}" && \
 # -----------------------------------------------------------------------------
 FROM ${ALPINE_IMAGE}
 
+# Default server timezone. Compose/runtime environment variables may override it.
+ENV TZ=Asia/Seoul
+
 # Labels
 LABEL maintainer="Wei-Shaw <github.com/Wei-Shaw>"
 LABEL description="Sub2API - AI API Gateway Platform"

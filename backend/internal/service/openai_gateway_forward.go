@@ -19,6 +19,7 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	auditDownstreamBody := append([]byte(nil), body...)
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -1069,6 +1070,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return nil, err
 		}
+		upstreamReq = s.attachGatewayRequestAudit(upstreamReq, c, account, auditDownstreamBody, "http")
 
 		// Get proxy URL
 		proxyURL := ""

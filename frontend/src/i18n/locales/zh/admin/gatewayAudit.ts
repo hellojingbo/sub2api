@@ -1,0 +1,50 @@
+export default {
+  gatewayAudit: {
+    title: '网关请求采集',
+    description: '手动采集下游请求与实际发出的上游请求，按 header 和 body 对照查看。',
+    start: '开始采集',
+    stop: '结束采集',
+    clear: '删除结果',
+    active: '采集中',
+    stopped: '已结束',
+    idle: '未开始',
+    session: '采集会话',
+    count: '请求数',
+    bytes: '数据量',
+    startedAt: '开始时间',
+    stoppedAt: '结束时间',
+    empty: '暂无采集结果。点击“开始采集”后，新的网关请求会出现在这里。',
+    loadFailed: '加载请求采集失败',
+    startFailed: '开始采集失败',
+    stopFailed: '结束采集失败',
+    clearFailed: '删除采集结果失败',
+    startHint: '开始后将持续记录请求，直到你点击“结束采集”。',
+    clearConfirm: '确定删除当前采集结果吗？删除后无法恢复。',
+    columns: {
+      time: '时间',
+      transport: '传输',
+      downstream: '下游请求',
+      upstream: '上游请求',
+      account: '账号',
+      detail: '详情'
+    },
+    detail: {
+      title: '请求采集详情',
+      downstream: '下游请求',
+      upstream: '上游请求',
+      headers: 'Headers 对照',
+      downstreamHeader: '下游值',
+      upstreamHeader: '上游值',
+      body: 'Body',
+      wireBody: '实际发送的编码 Body',
+      method: '方法',
+      url: 'URL',
+      transport: '传输',
+      account: '账号',
+      requestId: '请求 ID',
+      capturedAt: '采集时间',
+      missing: '—',
+      base64: 'Base64 内容'
+    }
+  }
+}

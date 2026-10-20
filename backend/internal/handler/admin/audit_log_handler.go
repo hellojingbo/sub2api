@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -16,16 +17,85 @@ import (
 // AuditLogHandler 操作审计日志管理接口。
 // 审计日志仅管理员可见；不提供单条删除，仅支持带 TOTP 验证的全量清空。
 type AuditLogHandler struct {
-	auditService *service.AuditLogService
-	totpService  *service.TotpService
+	auditService        *service.AuditLogService
+	totpService         *service.TotpService
+	gatewayRequestAudit *service.GatewayRequestAuditService
 }
 
 // NewAuditLogHandler 创建审计日志处理器。
-func NewAuditLogHandler(auditService *service.AuditLogService, totpService *service.TotpService) *AuditLogHandler {
+func NewAuditLogHandler(
+	auditService *service.AuditLogService,
+	totpService *service.TotpService,
+	gatewayRequestAudit *service.GatewayRequestAuditService,
+) *AuditLogHandler {
 	return &AuditLogHandler{
-		auditService: auditService,
-		totpService:  totpService,
+		auditService:        auditService,
+		totpService:         totpService,
+		gatewayRequestAudit: gatewayRequestAudit,
 	}
+}
+
+// GatewayRequestAuditState 返回手动采集状态。
+func (h *AuditLogHandler) GatewayRequestAuditState(c *gin.Context) {
+	state, err := h.gatewayRequestAudit.State(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, state)
+}
+
+// GatewayRequestAuditStart 开始新的请求采集会话。
+func (h *AuditLogHandler) GatewayRequestAuditStart(c *gin.Context) {
+	state, err := h.gatewayRequestAudit.Start(c.Request.Context())
+	if err != nil {
+		if errors.Is(err, service.ErrGatewayRequestAuditActive) {
+			response.ErrorWithDetails(c, http.StatusConflict, "Request capture is already active", "GATEWAY_REQUEST_AUDIT_ACTIVE", nil)
+			return
+		}
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, state)
+}
+
+// GatewayRequestAuditStop 结束当前采集会话并保留结果。
+func (h *AuditLogHandler) GatewayRequestAuditStop(c *gin.Context) {
+	state, err := h.gatewayRequestAudit.Stop(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, state)
+}
+
+// GatewayRequestAuditClear 删除当前采集结果。
+func (h *AuditLogHandler) GatewayRequestAuditClear(c *gin.Context) {
+	if err := h.gatewayRequestAudit.Clear(c.Request.Context()); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"cleared": true})
+}
+
+// GatewayRequestAuditList 返回当前采集会话中的全部请求。
+func (h *AuditLogHandler) GatewayRequestAuditList(c *gin.Context) {
+	records, err := h.gatewayRequestAudit.List(c.Request.Context())
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, records)
+}
+
+// GatewayRequestAuditGet 返回一条上下游对照详情。
+func (h *AuditLogHandler) GatewayRequestAuditGet(c *gin.Context) {
+	record, err := h.gatewayRequestAudit.Get(c.Request.Context(), strings.TrimSpace(c.Param("id")))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, record)
 }
 
 // List 分页查询审计日志。

@@ -205,6 +205,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 	if err := compressOpenAICodexRequest(req); err != nil {
 		return nil, err
 	}
+	service.CaptureGatewayRequestAudit(req)
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
 	}
@@ -259,6 +260,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	if err := compressOpenAICodexRequest(req); err != nil {
 		return nil, err
 	}
+	service.CaptureGatewayRequestAudit(req)
 	upstreamProfile := service.HTTPUpstreamProfileDefault
 	if req != nil {
 		upstreamProfile = service.HTTPUpstreamProfileFromContext(req.Context())

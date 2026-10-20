@@ -130,6 +130,19 @@ func RegisterAdminRoutes(
 
 		// 操作审计日志
 		registerAuditLogRoutes(admin, h, stepUpAuth)
+		registerGatewayRequestAuditRoutes(admin, h)
+	}
+}
+
+func registerGatewayRequestAuditRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	capture := admin.Group("/gateway-request-audit")
+	{
+		capture.GET("/state", h.Admin.AuditLog.GatewayRequestAuditState)
+		capture.POST("/start", h.Admin.AuditLog.GatewayRequestAuditStart)
+		capture.POST("/stop", h.Admin.AuditLog.GatewayRequestAuditStop)
+		capture.DELETE("/records", h.Admin.AuditLog.GatewayRequestAuditClear)
+		capture.GET("/records", h.Admin.AuditLog.GatewayRequestAuditList)
+		capture.GET("/records/:id", h.Admin.AuditLog.GatewayRequestAuditGet)
 	}
 }
 
