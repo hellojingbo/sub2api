@@ -17,6 +17,12 @@ var (
 	codexEnvironmentContextSelfClosingRE = regexp.MustCompile(`(?s)<environment_context\b[^>]*/\s*>`)
 	codexEnvironmentContextCurrentDateRE = regexp.MustCompile(`(?s)<current_date\b[^>]*(?:/>|>.*?</current_date\s*>)`)
 	codexEnvironmentContextTimezoneRE    = regexp.MustCompile(`(?s)<timezone\b[^>]*(?:/>|>.*?</timezone\s*>)`)
+	// Codex App injects a separate developer message that tells the model to
+	// prefer the client's local date/time over the execution host's values.
+	// Leaving it untouched would keep exposing the real downstream timezone
+	// after the environment context has been aligned with the proxy region.
+	codexAppsClientTimeContextBlockRE       = regexp.MustCompile(`(?s)<codex_apps_client_time_context\b[^>]*>.*?</codex_apps_client_time_context\s*>`)
+	codexAppsClientTimeContextSelfClosingRE = regexp.MustCompile(`(?s)<codex_apps_client_time_context\b[^>]*/\s*>`)
 )
 
 // normalizeCodexEnvironmentContextTimezone validates an IANA timezone and
@@ -87,6 +93,37 @@ func renderCodexEnvironmentContextBlock(block, currentDate, timezone string) str
 	return block[:openingEnd+1] + inner + block[closingStart:closingEnd]
 }
 
+// renderCodexAppsClientTimeContextBlock replaces the date/timezone values in
+// place so the rest of the developer message (especially the instruction line)
+// keeps its original wording and ordering.
+func renderCodexAppsClientTimeContextBlock(block, currentDate, timezone string) string {
+	openingEnd := strings.IndexByte(block, '>')
+	if openingEnd < 0 {
+		return block
+	}
+
+	lowerBlock := strings.ToLower(block)
+	closingStart := strings.LastIndex(lowerBlock, "</codex_apps_client_time_context")
+	if closingStart < 0 {
+		return block
+	}
+	closingEndRelative := strings.IndexByte(block[closingStart:], '>')
+	if closingEndRelative < 0 {
+		return block
+	}
+	closingEnd := closingStart + closingEndRelative + 1
+
+	inner := block[openingEnd+1 : closingStart]
+	inner = codexEnvironmentContextCurrentDateRE.ReplaceAllString(inner, "<current_date>"+currentDate+"</current_date>")
+	inner = codexEnvironmentContextTimezoneRE.ReplaceAllString(inner, "<timezone>"+timezone+"</timezone>")
+
+	return block[:openingEnd+1] + inner + block[closingStart:closingEnd]
+}
+
+// rewriteCodexEnvironmentContextText aligns both time contexts that Codex can
+// send: the execution-host environment context and the Codex App client time
+// context. They must use the same effective date/timezone so an upstream
+// request does not carry conflicting location hints.
 func rewriteCodexEnvironmentContextText(text string, currentDate, timezone string) (string, bool, bool) {
 	found := false
 	changed := false
@@ -107,6 +144,28 @@ func rewriteCodexEnvironmentContextText(text string, currentDate, timezone strin
 		replacement.WriteString("</current_date>\n  <timezone>")
 		replacement.WriteString(timezone)
 		replacement.WriteString("</timezone>\n</environment_context>")
+		next := replacement.String()
+		if next != block {
+			changed = true
+		}
+		return next
+	})
+	rewritten = codexAppsClientTimeContextBlockRE.ReplaceAllStringFunc(rewritten, func(block string) string {
+		found = true
+		next := renderCodexAppsClientTimeContextBlock(block, currentDate, timezone)
+		if next != block {
+			changed = true
+		}
+		return next
+	})
+	rewritten = codexAppsClientTimeContextSelfClosingRE.ReplaceAllStringFunc(rewritten, func(block string) string {
+		found = true
+		var replacement strings.Builder
+		replacement.WriteString("<codex_apps_client_time_context><timezone>")
+		replacement.WriteString(timezone)
+		replacement.WriteString("</timezone>\n<current_date>")
+		replacement.WriteString(currentDate)
+		replacement.WriteString("</current_date></codex_apps_client_time_context>")
 		next := replacement.String()
 		if next != block {
 			changed = true

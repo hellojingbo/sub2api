@@ -225,9 +225,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	if isCodexCLI {
-		// Codex CLI sends the environment context as a user input item. Rebuild
-		// its date/timezone from the effective proxy region before any protocol
-		// or account-specific forwarding path serializes the request.
+		// Codex sends the execution-host environment context and, in Codex App,
+		// a separate client time context. Rebuild both dates/timezones from the
+		// effective proxy region before any protocol or account-specific
+		// forwarding path serializes the request.
 		normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBodyWithTimezone(
 			body,
 			s.codexEnvironmentContextTimezone(ctx, account),

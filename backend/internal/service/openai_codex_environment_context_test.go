@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -60,6 +61,46 @@ func TestRewriteCodexEnvironmentContextBodyReplacesDateAndTimezone(t *testing.T)
 	require.Contains(t, string(rewritten), "<timezone>America/Los_Angeles</timezone>")
 	require.NotContains(t, string(rewritten), "1999-12-31")
 	require.NotContains(t, string(rewritten), "Asia/Shanghai")
+}
+
+func TestRewriteCodexEnvironmentContextBodyAlignsAppsClientTimeContext(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<codex_apps_client_time_context><timezone>Asia/Shanghai</timezone>\n<current_date>2026-01-01</current_date>\nUse this client time context for user-facing dates, times, and schedules instead of the execution host's timezone and current date.</codex_apps_client_time_context>"}]}]}`)
+	now := time.Date(2026, 1, 2, 1, 30, 0, 0, time.UTC)
+
+	rewritten, changed, err := rewriteCodexEnvironmentContextBodyWithTimezoneAt(body, now, "Asia/Tokyo")
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Contains(t, string(rewritten), "<timezone>Asia/Tokyo</timezone>")
+	require.Contains(t, string(rewritten), "<current_date>2026-01-02</current_date>")
+	require.Contains(t, string(rewritten), "Use this client time context for user-facing dates, times, and schedules instead of the execution host's timezone and current date.")
+	require.NotContains(t, string(rewritten), "Asia/Shanghai")
+	require.NotContains(t, string(rewritten), "2026-01-01")
+}
+
+func TestRewriteCodexEnvironmentContextBodyAlignsBothTimeContexts(t *testing.T) {
+	body := []byte(`{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/workspace</cwd>\n  <current_date>2026-01-01</current_date>\n  <timezone>Asia/Shanghai</timezone>\n</environment_context>"}]},{"type":"message","role":"developer","content":[{"type":"input_text","text":"<codex_apps_client_time_context><timezone>Asia/Shanghai</timezone>\n<current_date>2026-01-01</current_date>\nUse this client time context for user-facing dates, times, and schedules instead of the execution host's timezone and current date.</codex_apps_client_time_context>"}]}]}`)
+	now := time.Date(2026, 1, 2, 1, 30, 0, 0, time.UTC)
+
+	rewritten, changed, err := rewriteCodexEnvironmentContextBodyWithTimezoneAt(body, now, "Asia/Tokyo")
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NotContains(t, string(rewritten), "Asia/Shanghai")
+	require.NotContains(t, string(rewritten), "2026-01-01")
+	require.Equal(t, 2, strings.Count(string(rewritten), "<timezone>Asia/Tokyo</timezone>"))
+	require.Equal(t, 2, strings.Count(string(rewritten), "<current_date>2026-01-02</current_date>"))
+}
+
+func TestRewriteCodexEnvironmentContextBodyIsIdempotentForAppsClientTimeContext(t *testing.T) {
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	body := []byte(`{"input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<codex_apps_client_time_context><timezone>America/Los_Angeles</timezone>\n<current_date>2026-07-04</current_date>\nUse this client time context for user-facing dates, times, and schedules instead of the execution host's timezone and current date.</codex_apps_client_time_context>"}]}]}`)
+
+	rewritten, changed, err := rewriteCodexEnvironmentContextBodyAt(body, now)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, string(body), string(rewritten))
 }
 
 func TestRewriteCodexEnvironmentContextBodyPreservesBodyWhenContextMissing(t *testing.T) {
