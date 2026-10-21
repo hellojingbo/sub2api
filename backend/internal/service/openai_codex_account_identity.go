@@ -16,6 +16,18 @@ import (
 
 const codexAccountIdentityNamespaceVersion = "v1"
 
+// codexSessionIdentityKind is shared by session/thread/request identity fields.
+// Codex CLI sets session-id, thread-id and x-client-request-id from the same
+// thread id for root sessions (and thread-id == x-client-request-id for
+// subagents). Scoping must preserve that equality instead of deriving one
+// opaque UUID per field kind.
+const codexSessionIdentityKind = "session"
+
+// codexWindowIdentityKind scopes Codex window ids. Codex encodes the window as
+// "<thread-id>:<window-number>", so the value is rewritten as
+// "<scoped-thread-id>:<window-number>" to keep the window linked to the thread.
+const codexWindowIdentityKind = "window"
+
 const codexAccountIdentitySourceContextKey = "openai_codex_account_identity_source"
 
 const codexNativeSessionIdentityContextKey = "openai_codex_native_session_identity"
@@ -104,7 +116,7 @@ func isolateOpenAIUpstreamSessionID(apiKeyID int64, account *Account, raw string
 		return ""
 	}
 	if account != nil && account.IsOpenAIOAuthLike() {
-		return scopeCodexAccountIdentityValue(account, apiKeyID, "legacy-session", raw)
+		return scopeCodexAccountIdentityValue(account, apiKeyID, codexSessionIdentityKind, raw)
 	}
 	namespace := codexAccountIdentityNamespace(account)
 	if namespace == "" {
@@ -130,6 +142,15 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 		// namespace above.
 		namespace = fmt.Sprintf("row:%d", account.ID)
 	}
+	if kind == codexWindowIdentityKind {
+		// Preserve Codex's "<thread-id>:<window-number>" shape. The thread part
+		// is scoped with the shared session kind, so window_id continues to
+		// refer to the same upstream thread instead of becoming an unrelated
+		// opaque UUID with the window number stripped.
+		if threadID, windowNumber, ok := splitCodexWindowID(raw); ok {
+			return scopeCodexAccountIdentityValue(account, apiKeyID, codexSessionIdentityKind, threadID) + ":" + windowNumber
+		}
+	}
 	return deriveStableUUIDv4(fmt.Sprintf(
 		"codex-account-identity:%s:user:%d:account:%s:kind:%s:value:%s",
 		codexAccountIdentityNamespaceVersion,
@@ -138,6 +159,27 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 		kind,
 		raw,
 	))
+}
+
+// splitCodexWindowID splits the canonical Codex window wire value
+// "<thread-id>:<window-number>". Non-canonical values are left to the legacy
+// whole-value scoping path.
+func splitCodexWindowID(raw string) (string, string, bool) {
+	index := strings.LastIndexByte(raw, ':')
+	if index <= 0 || index == len(raw)-1 {
+		return "", "", false
+	}
+	threadID := strings.TrimSpace(raw[:index])
+	windowNumber := raw[index+1:]
+	if threadID == "" {
+		return "", "", false
+	}
+	for _, digit := range windowNumber {
+		if digit < '0' || digit > '9' {
+			return "", "", false
+		}
+	}
+	return threadID, windowNumber, true
 }
 
 func shouldScopeCodexAccountIdentityValue(account *Account, raw string) bool {
@@ -153,15 +195,21 @@ var codexAccountIdentityFields = []struct {
 }{
 	{name: "installation_id", kind: "installation"},
 	{name: "x-codex-installation-id", kind: "installation"},
-	{name: "session_id", kind: "session"},
-	{name: "session-id", kind: "session"},
-	{name: "thread_id", kind: "thread"},
-	{name: "thread-id", kind: "thread"},
+	{name: "session_id", kind: codexSessionIdentityKind},
+	{name: "session-id", kind: codexSessionIdentityKind},
+	{name: "thread_id", kind: codexSessionIdentityKind},
+	{name: "thread-id", kind: codexSessionIdentityKind},
+	// Turn-family ids share one scope: a root session sets root_turn_id equal to
+	// turn_id, and a child sets root/parent ids to the same ancestor turn. The
+	// equalities must survive convergence, otherwise the raw downstream values
+	// leak through root_turn_id even though turn_id itself is scoped.
 	{name: "turn_id", kind: "turn"},
 	{name: "turn-id", kind: "turn"},
-	{name: "window_id", kind: "window"},
-	{name: "x-codex-window-id", kind: "window"},
-	{name: "x-client-request-id", kind: "request"},
+	{name: "root_turn_id", kind: "turn"},
+	{name: "parent_turn_id", kind: "turn"},
+	{name: "window_id", kind: codexWindowIdentityKind},
+	{name: "x-codex-window-id", kind: codexWindowIdentityKind},
+	{name: "x-client-request-id", kind: codexSessionIdentityKind},
 }
 
 func applyCodexAccountIdentityFields(values map[string]any, account *Account, apiKeyID int64) bool {
@@ -225,7 +273,7 @@ func applyCodexAccountIdentityClientMetadataMap(requestBody map[string]any, acco
 	if raw, ok := requestBody["prompt_cache_key"].(string); ok && strings.TrimSpace(raw) != "" {
 		kind := "prompt-cache"
 		if strings.TrimSpace(originalBodySessionID) != "" && raw == originalBodySessionID {
-			kind = "session"
+			kind = codexSessionIdentityKind
 		}
 		if !shouldScopeCodexAccountIdentityValue(account, raw) {
 			return changed
@@ -281,7 +329,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 		raw := promptCacheKey.String()
 		kind := "prompt-cache"
 		if strings.TrimSpace(originalBodySessionID) != "" && raw == originalBodySessionID {
-			kind = "session"
+			kind = codexSessionIdentityKind
 		}
 		if !shouldScopeCodexAccountIdentityValue(account, raw) {
 			return next, changed, nil
@@ -397,11 +445,13 @@ func stageCodexNativeSessionIdentity(c *gin.Context, account *Account, apiKeyID 
 		identity.rawThread = identity.rawSession
 	}
 	if identity.rawRequest == "" {
-		identity.rawRequest = uuid.NewString()
+		// Codex CLI always sends x-client-request-id equal to thread-id, so a
+		// missing downstream value must not introduce a third random identity.
+		identity.rawRequest = identity.rawThread
 	}
-	identity.SessionID = scopeCodexAccountIdentityValue(source, apiKeyID, "session", identity.rawSession)
-	identity.ThreadID = scopeCodexAccountIdentityValue(source, apiKeyID, "thread", identity.rawThread)
-	identity.RequestID = scopeCodexAccountIdentityValue(source, apiKeyID, "request", identity.rawRequest)
+	identity.SessionID = scopeCodexAccountIdentityValue(source, apiKeyID, codexSessionIdentityKind, identity.rawSession)
+	identity.ThreadID = scopeCodexAccountIdentityValue(source, apiKeyID, codexSessionIdentityKind, identity.rawThread)
+	identity.RequestID = scopeCodexAccountIdentityValue(source, apiKeyID, codexSessionIdentityKind, identity.rawRequest)
 	if c != nil {
 		c.Set(codexNativeSessionIdentityContextKey, identity)
 	}

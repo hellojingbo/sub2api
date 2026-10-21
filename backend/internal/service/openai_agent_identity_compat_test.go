@@ -135,7 +135,7 @@ func TestOpenAIAgentIdentityPassthroughKeepsSessionAndPromptCacheHeaders(t *test
 	require.NotEqual(t, "client-session", req.Header.Get("session-id"))
 	require.NotEqual(t, "client-conversation", req.Header.Get("session-id"))
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"), req.Header.Get("session-id"))
-	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "client-session"), req.Header.Get("thread-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, codexSessionIdentityKind, "client-session"), req.Header.Get("thread-id"))
 	require.NotEmpty(t, req.Header.Get("x-client-request-id"))
 	requestBody, err := io.ReadAll(req.Body)
 	require.NoError(t, err)

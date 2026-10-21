@@ -467,8 +467,8 @@ func TestOpenAIGatewayService_BuildOpenAIWSHeadersDeviceModePreservesNamespacedC
 	require.NotEqual(t, "client-installation", headers.Get("x-codex-installation-id"))
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "window", "client-window"), headers.Get("x-codex-window-id"))
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "client-session"), headers.Get("session-id"))
-	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "client-thread"), headers.Get("thread-id"))
-	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "request", "client-request"), headers.Get("x-client-request-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, codexSessionIdentityKind, "client-thread"), headers.Get("thread-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, codexSessionIdentityKind, "client-request"), headers.Get("x-client-request-id"))
 }
 
 func TestLogOpenAIWSBindResponseAccountWarn(t *testing.T) {
@@ -801,7 +801,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	// Native OAuth uses the official hyphenated session headers. The
 	// conversation_id compatibility header is intentionally absent.
 	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "session", "sess-oauth-1"), captureDialer.lastHeaders.Get("session-id"))
-	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, "thread", "sess-oauth-1"), captureDialer.lastHeaders.Get("thread-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 0, codexSessionIdentityKind, "sess-oauth-1"), captureDialer.lastHeaders.Get("thread-id"))
 	require.NotEmpty(t, captureDialer.lastHeaders.Get("x-client-request-id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 }

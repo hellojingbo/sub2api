@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -234,6 +235,183 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 		require.NotEqual(t, first.Get(header), second.Get(header), "account failover must rotate upstream identity: %s", header)
 	}
 	require.GreaterOrEqual(t, checked, 5, "test must exercise the real outbound identity surface")
+}
+
+func TestBuildUpstreamRequestPreservesCodexRootSessionIdentityEquality(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const (
+		rawID     = "019fbafc-59e6-7d62-8ec6-38ddc077db6f"
+		rawTurnID = "01a15cec-3900-72c2-bcbd-939ff4dd2ed5"
+		rawWindow = rawID + ":47"
+	)
+	body := []byte(`{"model":"gpt-5.6-codex","stream":true,"prompt_cache_key":"` + rawID + `","client_metadata":{"session_id":"` + rawID + `","thread_id":"` + rawID + `","turn_id":"` + rawTurnID + `","root_turn_id":"` + rawTurnID + `","x-codex-window-id":"` + rawWindow + `","x-codex-turn-metadata":"{\"session_id\":\"` + rawID + `\",\"thread_id\":\"` + rawID + `\",\"turn_id\":\"` + rawTurnID + `\",\"root_turn_id\":\"` + rawTurnID + `\",\"window_id\":\"` + rawWindow + `\"}"}}`)
+	account := &Account{
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "chatgpt-account-11",
+			"chatgpt_user_id":    "user-11",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Set("api_key", &APIKey{ID: 77})
+	c.Request.Header.Set("session-id", rawID)
+	c.Request.Header.Set("thread-id", rawID)
+	c.Request.Header.Set("x-client-request-id", rawID)
+	c.Request.Header.Set("x-codex-window-id", rawWindow)
+	c.Request.Header.Set("x-codex-turn-metadata", `{"session_id":"`+rawID+`","thread_id":"`+rawID+`","turn_id":"`+rawTurnID+`","root_turn_id":"`+rawTurnID+`","window_id":"`+rawWindow+`"}`)
+
+	rewrittenBody, changed, err := applyCodexAccountIdentityClientMetadataRaw(body, account, 77)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	svc := &OpenAIGatewayService{}
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account, rewrittenBody, "oauth-token", true, rawID, true)
+	require.NoError(t, err)
+
+	sessionID := req.Header.Get("session-id")
+	threadID := req.Header.Get("thread-id")
+	requestID := req.Header.Get("x-client-request-id")
+	require.NotEmpty(t, sessionID)
+	require.NotEqual(t, rawID, sessionID)
+	require.Equal(t, sessionID, threadID, "Codex CLI uses the same id for session-id and thread-id on root sessions")
+	require.Equal(t, threadID, requestID, "Codex CLI sends x-client-request-id equal to thread-id")
+
+	windowID := req.Header.Get("x-codex-window-id")
+	require.Equal(t, threadID+":47", windowID, "window_id must keep Codex's thread-id:window-number shape")
+	require.NotContains(t, windowID, rawID)
+
+	var headerMetadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(req.Header.Get("x-codex-turn-metadata")), &headerMetadata))
+	require.Equal(t, threadID, headerMetadata["thread_id"])
+	require.Equal(t, headerMetadata["turn_id"], headerMetadata["root_turn_id"], "root sessions keep root_turn_id equal to turn_id")
+	require.Equal(t, windowID, headerMetadata["window_id"])
+	rootTurnID, ok := headerMetadata["root_turn_id"].(string)
+	require.True(t, ok)
+	require.NotContains(t, rootTurnID, rawTurnID)
+
+	upstreamBody, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
+	require.Equal(t, sessionID, gjson.GetBytes(upstreamBody, "prompt_cache_key").String())
+	require.Equal(t, sessionID, gjson.GetBytes(upstreamBody, "client_metadata.session_id").String())
+	require.Equal(t, threadID, gjson.GetBytes(upstreamBody, "client_metadata.thread_id").String())
+	require.Equal(t, headerMetadata["turn_id"], gjson.GetBytes(upstreamBody, "client_metadata.turn_id").String())
+	require.Equal(t, headerMetadata["root_turn_id"], gjson.GetBytes(upstreamBody, "client_metadata.root_turn_id").String())
+	require.Equal(t, windowID, gjson.GetBytes(upstreamBody, "client_metadata.x-codex-window-id").String())
+	require.NotContains(t, string(upstreamBody), rawTurnID)
+	var embedded map[string]any
+	require.NoError(t, json.Unmarshal([]byte(gjson.GetBytes(upstreamBody, "client_metadata.x-codex-turn-metadata").String()), &embedded))
+	require.Equal(t, sessionID, embedded["session_id"])
+	require.Equal(t, threadID, embedded["thread_id"])
+	require.Equal(t, headerMetadata["turn_id"], embedded["turn_id"])
+	require.Equal(t, headerMetadata["root_turn_id"], embedded["root_turn_id"])
+	require.Equal(t, windowID, embedded["window_id"])
+}
+
+func TestCodexAccountIdentityPreservesTurnHierarchyAndWindowNumber(t *testing.T) {
+	const (
+		childThread = "01a11084-9fb2-7372-814b-091f9adf08a2"
+		childTurn   = "01a15d17-bbbd-7933-983b-6ca5b55dd0ae"
+		parentTurn  = "01a15cec-3900-72c2-bcbd-939ff4dd2ed5"
+	)
+	account := &Account{
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "chatgpt-account-11",
+			"chatgpt_user_id":    "user-11",
+		},
+	}
+
+	values := map[string]any{
+		"thread_id":      childThread,
+		"turn_id":        childTurn,
+		"root_turn_id":   parentTurn,
+		"parent_turn_id": parentTurn,
+		"window_id":      childThread + ":3",
+	}
+	require.True(t, applyCodexAccountIdentityFields(values, account, 77))
+
+	scopedThread := scopeCodexAccountIdentityValue(account, 77, codexSessionIdentityKind, childThread)
+	scopedChildTurn := scopeCodexAccountIdentityValue(account, 77, "turn", childTurn)
+	scopedParentTurn := scopeCodexAccountIdentityValue(account, 77, "turn", parentTurn)
+	require.Equal(t, scopedThread, values["thread_id"])
+	require.Equal(t, scopedChildTurn, values["turn_id"])
+	require.Equal(t, scopedParentTurn, values["root_turn_id"])
+	require.Equal(t, scopedParentTurn, values["parent_turn_id"])
+	require.NotEqual(t, values["turn_id"], values["root_turn_id"], "a subagent keeps its own turn distinct from the ancestor turn")
+	require.Equal(t, scopedThread+":3", values["window_id"])
+
+	// Non-canonical window values keep the legacy whole-value scoping.
+	legacy := map[string]any{"window_id": "opaque-window"}
+	require.True(t, applyCodexAccountIdentityFields(legacy, account, 77))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 77, codexWindowIdentityKind, "opaque-window"), legacy["window_id"])
+}
+
+func TestBuildUpstreamRequestKeepsSubagentSessionAndThreadDistinct(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const (
+		rootSession = "019fbafc-59e6-7d62-8ec6-38ddc077db6f"
+		childThread = "01a11084-9fb2-7372-814b-091f9adf08a2"
+	)
+	body := []byte(`{"model":"gpt-5.6-codex","stream":true,"prompt_cache_key":"` + rootSession + `","client_metadata":{"session_id":"` + rootSession + `","thread_id":"` + childThread + `"}}`)
+	account := &Account{
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "chatgpt-account-11",
+			"chatgpt_user_id":    "user-11",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Set("api_key", &APIKey{ID: 77})
+	c.Request.Header.Set("session-id", rootSession)
+	c.Request.Header.Set("thread-id", childThread)
+	c.Request.Header.Set("x-client-request-id", childThread)
+
+	svc := &OpenAIGatewayService{}
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", true, rootSession, true)
+	require.NoError(t, err)
+
+	require.NotEqual(t, req.Header.Get("session-id"), req.Header.Get("thread-id"))
+	require.Equal(t, req.Header.Get("thread-id"), req.Header.Get("x-client-request-id"))
+}
+
+func TestBuildUpstreamRequestDerivesMissingClientRequestIDFromThread(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const rawID = "019fbafc-59e6-7d62-8ec6-38ddc077db6f"
+	body := []byte(`{"model":"gpt-5.6-codex","stream":true,"prompt_cache_key":"` + rawID + `","client_metadata":{"session_id":"` + rawID + `","thread_id":"` + rawID + `"}}`)
+	account := &Account{
+		ID:       11,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "chatgpt-account-11",
+			"chatgpt_user_id":    "user-11",
+		},
+	}
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+	c.Set("api_key", &APIKey{ID: 77})
+	c.Request.Header.Set("session-id", rawID)
+	c.Request.Header.Set("thread-id", rawID)
+
+	svc := &OpenAIGatewayService{}
+	req, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", true, rawID, true)
+	require.NoError(t, err)
+
+	require.Equal(t, req.Header.Get("thread-id"), req.Header.Get("x-client-request-id"))
 }
 
 func TestCodexNativeSessionIdentityUsesOfficialHeadersAndIsolatesAccounts(t *testing.T) {
