@@ -222,7 +222,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		default:
 			return nil, err
 		}
-		rebuilt, marshalErr := json.Marshal(payload)
+		rebuilt, marshalErr := marshalCodexResponsesJSON(payload)
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
@@ -263,6 +263,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
+		// The first response.create frame may carry the canonical client
+		// metadata even when the handshake has no identifying headers.
+		isCodexCLI = isCodexCLI || isCodexOfficialClientForRequest(c, normalized)
 		if isCodexCLI {
 			normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBodyWithTimezone(
 				normalized,
@@ -286,7 +289,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			normalized = next
 		}
 		responsesLite := isOpenAIResponsesLiteWebSocketPayload(normalized)
-		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(s.cfg, normalized, account, responsesLite); compatibilityErr != nil {
+		if compatibilityBody, compatibilityChanged, compatibilityErr := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndItemIDs(s.cfg, normalized, account, responsesLite, isCodexOfficialClientForRequest(c, normalized)); compatibilityErr != nil {
 			return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", compatibilityErr)
 		} else if compatibilityChanged {
 			normalized = compatibilityBody
@@ -329,12 +332,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
-		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" {
-			next, setErr := applyPayloadMutation(normalized, "client_metadata."+openAIWSTurnMetadataHeader, turnMetadata)
-			if setErr != nil {
-				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", setErr)
+		if codexTurnMetadataFromBody(normalized) == "" {
+			if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" {
+				next, setErr := applyPayloadMutation(normalized, "client_metadata."+openAIWSTurnMetadataHeader, turnMetadata)
+				if setErr != nil {
+					return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", setErr)
+				}
+				normalized = next
 			}
-			normalized = next
 		}
 		accountIdentitySourceRaw := append([]byte(nil), normalized...)
 		accountScopedPayload, accountScoped, scopeErr := applyCodexAccountIdentityClientMetadataRaw(normalized, codexAccountIdentitySource(c, account), getAPIKeyIDFromContext(c))
@@ -388,7 +393,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				logOpenAIWSModeInfo("ingress_ws_codex_image_bridge_instructions_added account_id=%d", account.ID)
 			}
 			if bridgeModified {
-				rebuilt, marshalErr := json.Marshal(payloadMap)
+				rebuilt, marshalErr := marshalCodexResponsesJSON(payloadMap)
 				if marshalErr != nil {
 					return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", marshalErr)
 				}
@@ -789,7 +794,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
-	wsHeaders, _, buildHdrErr := s.buildOpenAIWSHeaders(
+	wsHeaders, _, buildHdrErr := s.buildOpenAIWSHeadersWithProfileMetadata(
 		ctx,
 		c,
 		account,
@@ -798,6 +803,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		isCodexCLI,
 		turnState,
 		strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)),
+		openAIWSEffectiveTurnMetadata(c, firstPayload.payloadRaw),
 		firstPayload.promptCacheKey,
 		firstRoutingFields[0].String(),
 		firstRoutingFields[1].String(),
@@ -1953,7 +1959,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if nextPayload.promptCacheKey != "" {
 			// ingress 会话在整个客户端 WS 生命周期内复用同一上游连接；
 			// prompt_cache_key 对握手头的更新仅在未来需要重新建连时生效。
-			updatedHeaders, _, updHdrErr := s.buildOpenAIWSHeaders(
+			updatedHeaders, _, updHdrErr := s.buildOpenAIWSHeadersWithProfileMetadata(
 				ctx,
 				c,
 				account,
@@ -1962,6 +1968,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				isCodexCLI,
 				turnState,
 				strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)),
+				openAIWSEffectiveTurnMetadata(c, nextPayload.payloadRaw),
 				nextPayload.promptCacheKey,
 				nextRoutingFields[0].String(),
 				nextRoutingFields[1].String(),

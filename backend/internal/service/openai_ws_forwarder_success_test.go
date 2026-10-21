@@ -882,19 +882,35 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 		name       string
 		userAgent  string
 		originator string
+		wantUA     string
+		wantOrigin string
 	}{
-		{name: "official desktop ua", userAgent: "Codex Desktop/1.2.3"},
+		{
+			name:       "official desktop ua",
+			userAgent:  "Codex Desktop/1.2.3",
+			wantUA:     codexWindowsDesktopUserAgent,
+			wantOrigin: codexWindowsDesktopOriginator,
+		},
 		{
 			name:       "mismatched originator",
 			userAgent:  "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
 			originator: "codex_cli_rs",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
 		},
 		{
 			name:       "tui identity",
 			userAgent:  "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 			originator: "codex-tui",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
 		},
-		{name: "official originator without ua", originator: "codex_vscode"},
+		{
+			name:       "official originator without ua",
+			originator: "codex_vscode",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
+		},
 	}
 
 	for _, tt := range tests {
@@ -958,9 +974,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 			result, err := svc.Forward(context.Background(), c, account, body)
 			require.NoError(t, err)
 			require.NotNil(t, result)
-			require.Equal(t, openai.CodexDefaultOriginator, captureDialer.lastHeaders.Get("originator"))
-			require.Equal(t, codexCLIUserAgent, captureDialer.lastHeaders.Get("user-agent"))
-			require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
+			require.Equal(t, tt.wantOrigin, captureDialer.lastHeaders.Get("originator"))
+			require.Equal(t, tt.wantUA, captureDialer.lastHeaders.Get("user-agent"))
+			require.Empty(t, captureDialer.lastHeaders.Get("version"), "native WS inference must not send the legacy Version header")
 		})
 	}
 }

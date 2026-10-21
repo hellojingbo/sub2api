@@ -21,9 +21,10 @@ func openAIResponsesInputItemIDPrefix(itemType string) (string, bool) {
 	case "tool_search_call":
 		return openAIResponsesToolCallIDPrefix(itemType), true
 	case "custom_tool_call_output":
-		// Although custom calls use ctc IDs, OpenAI validates replayed custom
-		// call output item IDs against the generic fc namespace.
-		return "fc", true
+		// Custom calls use ctc IDs. The backend has also accepted fc-prefixed
+		// output item IDs, and the official client preserves whichever value it
+		// received, so both namespaces are valid on replay.
+		return "ctc", true
 	default:
 		if isCodexToolCallInputType(itemType) {
 			return openAIResponsesToolCallIDPrefix(itemType), true
@@ -46,6 +47,9 @@ func openAIResponsesToolCallIDPrefix(itemType string) string {
 // Invalid replayed IDs are removed rather than rewritten because a fabricated
 // ID may point at a different upstream object.
 func shouldStripOpenAIResponsesInputItemID(itemType, id string) bool {
+	if strings.TrimSpace(itemType) == "custom_tool_call_output" {
+		return id == "" || len(id) > 64 || (!strings.HasPrefix(id, "ctc_") && !strings.HasPrefix(id, "fc_"))
+	}
 	prefix, constrained := openAIResponsesInputItemIDPrefix(itemType)
 	if !constrained {
 		return false

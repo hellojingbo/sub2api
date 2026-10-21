@@ -1438,12 +1438,22 @@ func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfig(cfg *config.Co
 	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{Config: cfg, ResponsesLite: responsesLite})
 }
 
+func normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndItemIDs(cfg *config.Config, body []byte, account *Account, responsesLite, preserveItemIDs bool) ([]byte, bool, error) {
+	return normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
+		Config:          cfg,
+		ResponsesLite:   responsesLite,
+		PreserveItemIDs: preserveItemIDs,
+	})
+}
+
 type openAIResponsesCompatibilityOptions struct {
 	Config        *config.Config
 	ResponsesLite bool
 	// Compact marks the /responses/compact wire shape, which is left as-is
 	// by request-shape compatibility rewrites such as web_search history.
 	Compact bool
+	// PreserveItemIDs leaves official Codex item ids/call ids untouched.
+	PreserveItemIDs bool
 }
 
 func normalizeOpenAIResponsesCompatibilityBodyWithOptions(body []byte, account *Account, opts openAIResponsesCompatibilityOptions) ([]byte, bool, error) {

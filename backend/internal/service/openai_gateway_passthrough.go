@@ -215,9 +215,10 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	if account != nil && account.IsOpenAI() {
 		responsesLite := isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) || isOpenAIResponsesLiteWebSocketPayload(body)
 		normalizedBody, normalized, normalizeErr := normalizeOpenAIResponsesCompatibilityBodyWithOptions(body, account, openAIResponsesCompatibilityOptions{
-			Config:        s.cfg,
-			ResponsesLite: responsesLite,
-			Compact:       isOpenAIResponsesCompactPath(c),
+			Config:          s.cfg,
+			ResponsesLite:   responsesLite,
+			Compact:         isOpenAIResponsesCompactPath(c),
+			PreserveItemIDs: isCodexOfficialClientForRequest(c, body),
 		})
 		if normalizeErr != nil {
 			return nil, fmt.Errorf("normalize passthrough Responses compatibility: %w", normalizeErr)
@@ -729,7 +730,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// 终态收口：透传路径的 OAuth 与非透传完全一致，同样强制统一出站身份
 	// （User-Agent / originator / version 同源自洽），客户端自报身份不会到达上游。
 	if account.UsesOpenAICodexProtocol() {
-		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
+		forceCLI := s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
+		profile := resolveCodexClientProfile(c, body, forceCLI)
+		enforceCodexIdentityHeadersWithProfile(req.Header, s.codexIdentityOverrideUA(account), profile)
 	}
 
 	if req.Header.Get("content-type") == "" {

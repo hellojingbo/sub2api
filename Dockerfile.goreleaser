@@ -49,8 +49,10 @@ WORKDIR /app
 COPY sub2api /app/sub2api
 COPY --chown=sub2api:sub2api backend/resources /app/resources
 
-# Create data directory
-RUN mkdir -p /app/data && chown -R sub2api:sub2api /app
+# Create data directory. chmod +x is required because the pre-built binary is
+# copied from the build context: transferring it from Windows/zip drops the
+# executable bit, which would make the entrypoint fail with "Permission denied".
+RUN mkdir -p /app/data && chown -R sub2api:sub2api /app && chmod +x /app/sub2api
 
 # Copy entrypoint script (fixes volume permissions then drops to sub2api)
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh

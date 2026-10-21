@@ -234,7 +234,7 @@ func rewriteCodexEnvironmentContextBodyWithTimezoneAt(body []byte, now time.Time
 		return body, false, nil
 	}
 
-	rebuilt, err := marshalOpenAIUpstreamJSON(reqBody)
+	rebuilt, err := marshalCodexResponsesJSON(reqBody)
 	if err != nil {
 		return body, false, fmt.Errorf("encode Codex environment context: %w", err)
 	}

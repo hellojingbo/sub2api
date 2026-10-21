@@ -88,10 +88,14 @@ type codexTransformResult struct {
 }
 
 type codexOAuthTransformOptions struct {
-	IsCodexCLI                          bool
-	IsCompact                           bool
-	SkipDefaultInstructions             bool
-	PreserveToolCallIDs                 bool
+	IsCodexCLI              bool
+	IsCompact               bool
+	SkipDefaultInstructions bool
+	PreserveToolCallIDs     bool
+	// PreserveItemIDs keeps native Codex item ids/call ids exactly as the
+	// official client sent them. It is only enabled for official clients; bridge
+	// and third-party compatibility paths continue to rewrite legacy ids.
+	PreserveItemIDs                     bool
 	OmitPromotedSystemMessagesFromInput bool
 	// ResponsesLite selects where an injected hosted tool is declared.
 	ResponsesLite bool
@@ -326,8 +330,9 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			result.Modified = true
 		}
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
-			PreserveReferences: needsToolContinuation,
-			PreserveCallIDs:    opts.PreserveToolCallIDs,
+			PreserveReferences: needsToolContinuation || opts.PreserveItemIDs,
+			PreserveCallIDs:    opts.PreserveToolCallIDs || opts.PreserveItemIDs,
+			PreserveItemIDs:    opts.PreserveItemIDs,
 		})
 		reqBody["input"] = input
 		result.Modified = true
@@ -1529,6 +1534,7 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 type codexInputFilterOptions struct {
 	PreserveReferences bool
 	PreserveCallIDs    bool
+	PreserveItemIDs    bool
 }
 
 // filterCodexInput 按需过滤 item_reference 与 id。
@@ -1544,6 +1550,32 @@ func normalizeCodexFilterCallID(itemType, id string, preserve bool) string {
 		return id
 	}
 	return normalizeCodexCallIDForItemType(itemType, id)
+}
+
+// normalizeCodexFilterCallIDStrict is used for native Codex replay, where an
+// arbitrary downstream call id is not assumed to be valid upstream. Already
+// shaped official ids are kept; anything else is normalized as before.
+func normalizeCodexFilterCallIDStrict(itemType, id string, preserve bool) string {
+	if preserve && len(id) <= codexCallIDMaxLength && codexCallIDHasOfficialPrefix(itemType, id) {
+		return id
+	}
+	return normalizeCodexCallIDForItemType(itemType, id)
+}
+
+// codexCallIDHasOfficialPrefix reports whether an already-shaped call id can be
+// replayed untouched. The official client uses call_* for call_id values even
+// when the item id carries a namespace-specific prefix like ctc_*, so both are
+// accepted. Anything else is treated as a legacy value and normalized.
+func codexCallIDHasOfficialPrefix(itemType, id string) bool {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" {
+		return false
+	}
+	if strings.HasPrefix(trimmed, "call_") {
+		return true
+	}
+	prefix := openAIResponsesToolCallIDPrefix(itemType) + "_"
+	return strings.HasPrefix(trimmed, prefix)
 }
 
 func codexItemReferenceIDMappings(input []any, preserveCallIDs bool) map[string]string {
@@ -1640,10 +1672,16 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		// below (id stripped when !PreserveReferences, encrypted_content
 		// preserved either way), which is safe and needs no special-casing.
 		if typ == "reasoning" {
+			// Native Codex replays its own rs_* id together with encrypted
+			// content. Stripping that id changes the official request shape; only
+			// legacy/bridge paths still need the id removed.
+			reasoningID := strings.TrimSpace(firstNonEmptyString(m["id"]))
+			keepID := opts.PreserveItemIDs && strings.TrimSpace(firstNonEmptyString(m["encrypted_content"])) != "" && !shouldStripOpenAIResponsesInputItemID(typ, reasoningID)
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
-				if key == "id" || key == "call_id" {
-					// rs_* id replayed under store=false 404s; strip it.
+				if key == "call_id" || (key == "id" && !keepID) {
+					// rs_* id replayed under store=false 404s when it has no
+					// encrypted_content; strip it in that case.
 					continue
 				}
 				newItem[key] = value
@@ -1659,6 +1697,9 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 		// 仅修正真正的 tool/function call 标识，避免误改普通 message/reasoning id；
 		// 若 item_reference 指向 legacy call_* 标识，则仅修正该引用本身。
 		fixCallIDPrefix := func(id string) string {
+			if opts.PreserveItemIDs {
+				return normalizeCodexFilterCallIDStrict(typ, id, opts.PreserveCallIDs)
+			}
 			return normalizeCodexFilterCallID(typ, id, opts.PreserveCallIDs)
 		}
 
@@ -1670,7 +1711,7 @@ func filterCodexInputWithOptions(input []any, opts codexInputFilterOptions) []an
 			for key, value := range m {
 				newItem[key] = value
 			}
-			if id, ok := newItem["id"].(string); ok && strings.HasPrefix(strings.TrimSpace(id), "call_") {
+			if id, ok := newItem["id"].(string); ok && !opts.PreserveItemIDs && strings.HasPrefix(strings.TrimSpace(id), "call_") {
 				trimmedID := strings.TrimSpace(id)
 				_, referencesExistingItem := inputItemIDs[trimmedID]
 				if !referencesExistingItem {

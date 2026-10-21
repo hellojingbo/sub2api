@@ -224,6 +224,38 @@ func deriveStableUUIDv4(seed string) string {
 		b[10:16])
 }
 
+// codexUUIDv7FallbackUnixMs is used only when the source value is not a
+// UUIDv7. It keeps derived IDs plausible and deterministic instead of falling
+// back to a timestamp-less v4 value.
+const codexUUIDv7FallbackUnixMs int64 = 1767225600000 // 2026-01-01T00:00:00Z
+
+// deriveStableUUIDv7 deterministically derives a UUIDv7 from seed. When source
+// is itself a UUIDv7, its 48-bit timestamp is preserved so a rewritten session
+// or turn keeps the original creation time and ordering semantics.
+func deriveStableUUIDv7(seed, source string) string {
+	h := sha256.Sum256([]byte(seed))
+	var b [16]byte
+	copy(b[:], h[:16])
+
+	preserved := false
+	if parsed, err := uuid.Parse(strings.TrimSpace(source)); err == nil && parsed.Version() == 7 {
+		copy(b[:6], parsed[:6])
+		preserved = true
+	}
+	if !preserved {
+		ms := codexUUIDv7FallbackUnixMs + int64(binary.BigEndian.Uint64(h[:8])%uint64(365*24*60*60*1000))
+		b[0] = byte(ms >> 40)
+		b[1] = byte(ms >> 32)
+		b[2] = byte(ms >> 24)
+		b[3] = byte(ms >> 16)
+		b[4] = byte(ms >> 8)
+		b[5] = byte(ms)
+	}
+	b[6] = (b[6] & 0x0f) | 0x70 // version 7
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 1
+	return uuid.UUID(b).String()
+}
+
 // resolveConvergedInstallationID 返回账号级恒定的 installation_id。
 // 优先使用管理员配置的真实 device_id，无则从系统管理的账号随机种子确定性派生。
 func resolveConvergedInstallationID(account *Account, seed string) string {
@@ -244,7 +276,7 @@ func resolveConvergedSessionID(seed string) string {
 	if seed == "" {
 		return ""
 	}
-	return deriveStableUUIDv4("sub2api:codex-session-id:v2:" + seed)
+	return deriveStableUUIDv7("sub2api:codex-session-id:v2:"+seed, "")
 }
 
 // resolveConvergedThreadID 按客户端原始 session-id 确定性派生 thread_id。
@@ -254,7 +286,7 @@ func resolveConvergedThreadID(seed, clientSessionID string) string {
 	if seed == "" || clientSessionID == "" {
 		return ""
 	}
-	return deriveStableUUIDv4("sub2api:codex-thread-id:v2:" + seed + ":" + clientSessionID)
+	return deriveStableUUIDv7("sub2api:codex-thread-id:v2:"+seed+":"+clientSessionID, clientSessionID)
 }
 
 // codexFingerprintIDs 收敛后的完整 ID 集合。
@@ -399,6 +431,7 @@ func rewriteCodexTurnMetadataFields(h http.Header, fields map[string]any) {
 	if err := json.Unmarshal([]byte(raw), &metadata); err != nil || metadata == nil {
 		metadata = make(map[string]any, len(fields))
 	}
+	addCodexFingerprintRelatedFields(metadata, fields)
 	for k, v := range fields {
 		metadata[k] = v
 	}
@@ -449,27 +482,76 @@ func applyCodexFingerprintToClientMetadataMap(existing map[string]any, ids *code
 	}
 
 	if ids.mode == codexFingerprintDevice {
-		rewriteClientMetadataEmbeddedTurnMetadata(existing, map[string]any{
+		fields := map[string]any{
 			"installation_id": ids.installationID,
-		})
+		}
+		addCodexFingerprintRelatedFields(existing, fields)
+		rewriteClientMetadataEmbeddedTurnMetadata(existing, fields)
 		return modified
 	}
 
 	// session / full 模式
-	existing["session_id"] = ids.sessionID
-	existing["thread_id"] = ids.threadID
-	existing["turn_id"] = ids.turnID
-	existing["x-codex-window-id"] = ids.windowID
-
-	rewriteClientMetadataEmbeddedTurnMetadata(existing, map[string]any{
+	fields := map[string]any{
 		"installation_id":         ids.installationID,
 		"session_id":              ids.sessionID,
 		"thread_id":               ids.threadID,
 		"turn_id":                 ids.turnID,
 		"window_id":               ids.windowID,
 		"turn_started_at_unix_ms": ids.turnStartedAtUnixMs,
-	})
+	}
+	addCodexFingerprintRelatedFields(existing, fields)
+	existing["session_id"] = ids.sessionID
+	existing["thread_id"] = ids.threadID
+	existing["turn_id"] = ids.turnID
+	existing["x-codex-window-id"] = ids.windowID
+	for _, key := range []string{"root_turn_id", "parent_turn_id", "parent_thread_id", "forked_from_thread_id", "x-codex-parent-thread-id"} {
+		if value, ok := fields[key]; ok {
+			existing[key] = value
+		}
+	}
+
+	rewriteClientMetadataEmbeddedTurnMetadata(existing, fields)
 	return true
+}
+
+// addCodexFingerprintRelatedFields keeps relationships among identity fields
+// intact when a converged value replaces the original. Account-identity scoping
+// already made equal raw ids equal, so equality with the old value is enough to
+// know that a related field must follow the new turn/thread.
+func addCodexFingerprintRelatedFields(values map[string]any, fields map[string]any) {
+	if values == nil || fields == nil {
+		return
+	}
+	oldTurn, _ := values["turn_id"].(string)
+	oldThread, _ := values["thread_id"].(string)
+	oldSession, _ := values["session_id"].(string)
+
+	if newTurn, ok := fields["turn_id"]; ok && oldTurn != "" {
+		for _, key := range []string{"root_turn_id", "parent_turn_id"} {
+			if value, _ := values[key].(string); value == oldTurn {
+				fields[key] = newTurn
+			}
+		}
+	}
+
+	newThread, hasThread := fields["thread_id"]
+	newSession, hasSession := fields["session_id"]
+	threadTarget := newThread
+	if !hasThread {
+		threadTarget = newSession
+	}
+	if !hasThread && !hasSession {
+		return
+	}
+	for _, key := range []string{"parent_thread_id", "forked_from_thread_id", "x-codex-parent-thread-id"} {
+		value, _ := values[key].(string)
+		if value == "" {
+			continue
+		}
+		if value == oldThread || value == oldSession {
+			fields[key] = threadTarget
+		}
+	}
 }
 
 func captureCodexFingerprintOriginalBodySessionID(ids *codexFingerprintIDs, clientMetadata any) {
@@ -557,7 +639,7 @@ func applyCodexFingerprintClientMetadataRaw(body []byte, ids *codexFingerprintID
 	next := body
 	modified := false
 	if applyCodexFingerprintToClientMetadataMap(existing, ids) {
-		raw, err := json.Marshal(existing)
+		raw, err := marshalCodexClientMetadataJSON(existing)
 		if err != nil {
 			return body, false, fmt.Errorf("encode converged client_metadata: %w", err)
 		}
@@ -592,6 +674,7 @@ func rewriteClientMetadataEmbeddedTurnMetadata(clientMetadata map[string]any, fi
 	if err := json.Unmarshal([]byte(raw), &metadata); err != nil || metadata == nil {
 		metadata = make(map[string]any, len(fields))
 	}
+	addCodexFingerprintRelatedFields(metadata, fields)
 	for k, v := range fields {
 		metadata[k] = v
 	}

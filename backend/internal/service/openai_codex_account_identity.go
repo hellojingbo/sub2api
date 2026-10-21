@@ -23,6 +23,10 @@ const codexAccountIdentityNamespaceVersion = "v1"
 // opaque UUID per field kind.
 const codexSessionIdentityKind = "session"
 
+// codexContextWindowIdentityKind scopes context_window_id independently. Codex
+// generates it with Uuid::now_v7() and does not require it to equal thread_id.
+const codexContextWindowIdentityKind = "context-window"
+
 // codexWindowIdentityKind scopes Codex window ids. Codex encodes the window as
 // "<thread-id>:<window-number>", so the value is rewritten as
 // "<scoped-thread-id>:<window-number>" to keep the window linked to the thread.
@@ -151,14 +155,21 @@ func scopeCodexAccountIdentityValue(account *Account, apiKeyID int64, kind, raw 
 			return scopeCodexAccountIdentityValue(account, apiKeyID, codexSessionIdentityKind, threadID) + ":" + windowNumber
 		}
 	}
-	return deriveStableUUIDv4(fmt.Sprintf(
+	seed := fmt.Sprintf(
 		"codex-account-identity:%s:user:%d:account:%s:kind:%s:value:%s",
 		codexAccountIdentityNamespaceVersion,
 		apiKeyID,
 		namespace,
 		kind,
 		raw,
-	))
+	)
+	// Official installation_id is UUIDv4; session/thread/turn/context-window
+	// values are UUIDv7. Preserve the downstream v7 timestamp so scoped IDs
+	// remain plausible and stable across retries.
+	if kind == "installation" {
+		return deriveStableUUIDv4(seed)
+	}
+	return deriveStableUUIDv7(seed, raw)
 }
 
 // splitCodexWindowID splits the canonical Codex window wire value
@@ -199,6 +210,13 @@ var codexAccountIdentityFields = []struct {
 	{name: "session-id", kind: codexSessionIdentityKind},
 	{name: "thread_id", kind: codexSessionIdentityKind},
 	{name: "thread-id", kind: codexSessionIdentityKind},
+	{name: "parent_thread_id", kind: codexSessionIdentityKind},
+	{name: "x-codex-parent-thread-id", kind: codexSessionIdentityKind},
+	{name: "forked_from_thread_id", kind: codexSessionIdentityKind},
+	// context_window_id is independent from thread_id in codex-rs, but it is a
+	// UUIDv7 created at turn start. Keep its version and timestamp while
+	// removing the downstream value.
+	{name: "context_window_id", kind: codexContextWindowIdentityKind},
 	// Turn-family ids share one scope: a root session sets root_turn_id equal to
 	// turn_id, and a child sets root/parent ids to the same ancestor turn. The
 	// equalities must survive convergence, otherwise the raw downstream values
@@ -313,7 +331,7 @@ func applyCodexAccountIdentityClientMetadataRaw(body []byte, account *Account, a
 			metadataChanged = true
 		}
 		if metadataChanged {
-			raw, err := json.Marshal(clientMetadata)
+			raw, err := marshalCodexClientMetadataJSON(clientMetadata)
 			if err != nil {
 				return body, false, fmt.Errorf("encode account-scoped client_metadata: %w", err)
 			}
@@ -439,7 +457,7 @@ func stageCodexNativeSessionIdentity(c *gin.Context, account *Account, apiKeyID 
 		identity.rawThread = bodyThread
 	}
 	if identity.rawSession == "" {
-		identity.rawSession = uuid.NewString()
+		identity.rawSession = uuid.Must(uuid.NewV7()).String()
 	}
 	if identity.rawThread == "" {
 		identity.rawThread = identity.rawSession

@@ -151,7 +151,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
 	forceNewConnByPolicy := shouldForceNewConnOnStoreDisabled(storeDisabledConnMode, lastFailureReason)
 	forceNewConn := forceNewConnByPolicy && storeDisabled && previousResponseID == "" && sessionHash != "" && preferredConnID == ""
-	wsHeaders, sessionResolution, buildHdrErr := s.buildOpenAIWSHeaders(
+	wsHeaders, sessionResolution, buildHdrErr := s.buildOpenAIWSHeadersWithProfileMetadata(
 		ctx,
 		c,
 		account,
@@ -160,6 +160,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		isCodexCLI,
 		turnState,
 		turnMetadata,
+		openAIWSEffectiveTurnMetadataFromMap(c, payload),
 		promptCacheKey,
 		openAIWSPayloadString(payload, "model"),
 		openAIWSPayloadString(payload, "service_tier"),

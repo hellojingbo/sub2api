@@ -75,6 +75,64 @@ func (s *OpenAIGatewayService) buildOpenAIResponsesWSURL(account *Account) (stri
 	return parsed.String(), nil
 }
 
+// openAIWSEffectiveTurnMetadata resolves the canonical turn metadata used for
+// persona selection. The body is authoritative; the direct header is a
+// compatibility fallback for clients that do not embed the projection.
+func openAIWSEffectiveTurnMetadata(c *gin.Context, payload []byte) string {
+	if raw := codexTurnMetadataFromBody(payload); raw != "" {
+		return raw
+	}
+	if c != nil {
+		if raw := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); raw != "" {
+			return raw
+		}
+	}
+	if len(payload) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(payload, "client_metadata."+openAIWSTurnMetadataHeader).String())
+}
+
+// openAIWSEffectiveTurnMetadataFromMap is the decoded-payload variant used by
+// the v2 forwarder, where the payload has already been rebuilt as a map.
+func openAIWSEffectiveTurnMetadataFromMap(c *gin.Context, payload map[string]any) string {
+	if raw := codexTurnMetadataFromMap(payload); raw != "" {
+		return raw
+	}
+	if c != nil {
+		if raw := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); raw != "" {
+			return raw
+		}
+	}
+	if len(payload) == 0 {
+		return ""
+	}
+	switch clientMetadata := payload["client_metadata"].(type) {
+	case map[string]any:
+		if raw, ok := clientMetadata[openAIWSTurnMetadataHeader].(string); ok {
+			return strings.TrimSpace(raw)
+		}
+	case map[string]string:
+		return strings.TrimSpace(clientMetadata[openAIWSTurnMetadataHeader])
+	}
+	return ""
+}
+
+func codexTurnMetadataFromMap(payload map[string]any) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	switch clientMetadata := payload["client_metadata"].(type) {
+	case map[string]any:
+		if raw, ok := clientMetadata[openAIWSTurnMetadataHeader].(string); ok {
+			return strings.TrimSpace(raw)
+		}
+	case map[string]string:
+		return strings.TrimSpace(clientMetadata[openAIWSTurnMetadataHeader])
+	}
+	return ""
+}
+
 func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	ctx context.Context,
 	c *gin.Context,
@@ -84,6 +142,30 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	isCodexCLI bool,
 	turnState string,
 	turnMetadata string,
+	promptCacheKey string,
+	routingModel string,
+	routingServiceTier string,
+) (http.Header, openAIWSSessionHeaderResolution, error) {
+	return s.buildOpenAIWSHeadersWithProfileMetadata(
+		ctx, c, account, token, decision, isCodexCLI,
+		turnState, turnMetadata, turnMetadata, promptCacheKey, routingModel, routingServiceTier,
+	)
+}
+
+// buildOpenAIWSHeadersWithProfileMetadata separates the metadata forwarded as
+// the compatibility header from the metadata used only to select the client
+// persona. The full body blob can contain tool inventory that is intentionally
+// not forwarded as a header.
+func (s *OpenAIGatewayService) buildOpenAIWSHeadersWithProfileMetadata(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	token string,
+	decision OpenAIWSProtocolDecision,
+	isCodexCLI bool,
+	turnState string,
+	turnMetadata string,
+	profileTurnMetadata string,
 	promptCacheKey string,
 	routingModel string,
 	routingServiceTier string,
@@ -179,7 +261,9 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	// 终态收口：WS 握手与 HTTP 出站共用同一套身份语义，账号级自定义 UA 同样作为
 	// 管理员显式配置传入（上面写进 headers 的值只在强制统一被关闭时才参与配对）。
 	if account != nil && account.UsesOpenAICodexProtocol() {
-		enforceCodexIdentityHeadersWithUA(headers, s.codexIdentityOverrideUA(account))
+		forceCLI := s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
+		profile := resolveCodexClientProfileFromTurnMetadata(c, profileTurnMetadata, forceCLI)
+		enforceCodexIdentityHeadersWithProfile(headers, s.codexIdentityOverrideUA(account), profile)
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）。

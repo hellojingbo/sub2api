@@ -3180,7 +3180,7 @@ func TestOpenAIBuildUpstreamRequestOpenAIPassthroughPreservesCompactPath(t *test
 	require.NoError(t, err)
 	require.Equal(t, chatgptCodexURL+"/compact", req.URL.String())
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+	require.Empty(t, req.Header.Get("Version"), "native Codex inference does not send the legacy Version header")
 	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
@@ -3221,7 +3221,7 @@ func TestOpenAIBuildUpstreamRequestCompactForcesJSONAcceptForOAuth(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, chatgptCodexURL+"/compact", req.URL.String())
 	require.Equal(t, "application/json", req.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, req.Header.Get("Version"))
+	require.Empty(t, req.Header.Get("Version"), "native Codex inference does not send the legacy Version header")
 	require.Empty(t, req.Header.Get("OpenAI-Beta"), "Codex OAuth HTTP must not synthesize the legacy responses beta header")
 	require.NotEmpty(t, req.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(req.Context()))
@@ -3359,20 +3359,41 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 		name       string
 		userAgent  string
 		originator string
+		wantUA     string
+		wantOrigin string
 	}{
-		{name: "official desktop ua", userAgent: "Codex Desktop/1.2.3"},
+		{
+			name:       "official desktop ua",
+			userAgent:  "Codex Desktop/1.2.3",
+			wantUA:     codexWindowsDesktopUserAgent,
+			wantOrigin: codexWindowsDesktopOriginator,
+		},
 		{
 			name:       "mismatched originator",
 			userAgent:  "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
 			originator: "codex_cli_rs",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
 		},
 		{
 			name:       "tui identity",
 			userAgent:  "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 			originator: "codex-tui",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
 		},
-		{name: "official originator without ua", originator: "codex_vscode"},
-		{name: "third-party ua", userAgent: "luna/1.2.0"},
+		{
+			name:       "official originator without ua",
+			originator: "codex_vscode",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
+		},
+		{
+			name:       "third-party ua",
+			userAgent:  "luna/1.2.0",
+			wantUA:     codexCLIUserAgent,
+			wantOrigin: openai.CodexDefaultOriginator,
+		},
 	}
 
 	for _, tt := range tests {
@@ -3396,9 +3417,9 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 			isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
 			req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", false, "", isCodexCLI)
 			require.NoError(t, err)
-			require.Equal(t, openai.CodexDefaultOriginator, req.Header.Get("originator"))
-			require.Equal(t, codexCLIUserAgent, req.Header.Get("User-Agent"))
-			require.Equal(t, codexCLIVersion, req.Header.Get("version"))
+			require.Equal(t, tt.wantOrigin, req.Header.Get("originator"))
+			require.Equal(t, tt.wantUA, req.Header.Get("User-Agent"))
+			require.Empty(t, req.Header.Get("version"), "native Codex inference must not send the legacy version header")
 		})
 	}
 }
