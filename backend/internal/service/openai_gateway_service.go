@@ -475,6 +475,7 @@ type OpenAIGatewayService struct {
 	settingService        *SettingService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
 	gatewayRequestAudit   *GatewayRequestAuditService
+	proxyLatencyCache     ProxyLatencyCache
 	liveAttestation       liveattestation.Provider
 	liveAttestationCipher SecretEncryptor
 
@@ -525,6 +526,15 @@ func (s *OpenAIGatewayService) SetGatewayRequestAuditService(audit *GatewayReque
 		return
 	}
 	s.gatewayRequestAudit = audit
+}
+
+// SetProxyLatencyCache attaches the proxy geo cache used to align the Codex
+// environment timezone with the effective egress proxy.
+func (s *OpenAIGatewayService) SetProxyLatencyCache(cache ProxyLatencyCache) {
+	if s == nil {
+		return
+	}
+	s.proxyLatencyCache = cache
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService

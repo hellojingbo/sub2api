@@ -7,7 +7,10 @@ import (
 	"time"
 )
 
-const codexEnvironmentContextTimezone = "America/Los_Angeles"
+const (
+	codexEnvironmentContextDefaultTimezone  = "America/Los_Angeles"
+	codexEnvironmentContextTimezoneExtraKey = "codex_environment_timezone"
+)
 
 var (
 	codexEnvironmentContextBlockRE       = regexp.MustCompile(`(?s)<environment_context\b[^>]*>.*?</environment_context\s*>`)
@@ -16,18 +19,40 @@ var (
 	codexEnvironmentContextTimezoneRE    = regexp.MustCompile(`(?s)<timezone\b[^>]*(?:/>|>.*?</timezone\s*>)`)
 )
 
-// codexEnvironmentContextValues returns the date and IANA timezone that Codex
-// should see. The date is derived from the current instant after converting it
-// to the fixed Codex/OpenAI US Pacific timezone, so a server running near
-// midnight in another timezone cannot leak its local calendar date upstream.
-func codexEnvironmentContextValues(now time.Time) (string, string) {
-	location, err := time.LoadLocation(codexEnvironmentContextTimezone)
-	if err != nil {
-		// Keep the wire timezone stable even when a minimal runtime image does not
-		// ship zoneinfo. The normal release images provide the IANA database.
-		return now.UTC().Format("2006-01-02"), codexEnvironmentContextTimezone
+// normalizeCodexEnvironmentContextTimezone validates an IANA timezone and
+// returns an empty string when it is missing or invalid. Empty/invalid values
+// are resolved to the default at the call site so an account-level typo cannot
+// make the environment context inconsistent.
+func normalizeCodexEnvironmentContextTimezone(timezone string) string {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		return ""
 	}
-	return now.In(location).Format("2006-01-02"), codexEnvironmentContextTimezone
+	if _, err := time.LoadLocation(timezone); err != nil {
+		return ""
+	}
+	return timezone
+}
+
+// codexEnvironmentContextValues returns the date and IANA timezone that Codex
+// should see. The date is derived from the current instant in the effective
+// timezone, so it matches the timezone sent in the same environment context.
+func codexEnvironmentContextValues(now time.Time, timezone string) (string, string) {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		timezone = codexEnvironmentContextDefaultTimezone
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		timezone = codexEnvironmentContextDefaultTimezone
+		location, err = time.LoadLocation(timezone)
+		if err != nil {
+			// Keep the wire timezone stable even when a minimal runtime image does
+			// not ship zoneinfo. The normal release images provide the IANA database.
+			return now.UTC().Format("2006-01-02"), timezone
+		}
+	}
+	return now.In(location).Format("2006-01-02"), timezone
 }
 
 func renderCodexEnvironmentContextBlock(block, currentDate, timezone string) string {
@@ -93,10 +118,18 @@ func rewriteCodexEnvironmentContextText(text string, currentDate, timezone strin
 }
 
 func rewriteCodexEnvironmentContextBody(body []byte) ([]byte, bool, error) {
-	return rewriteCodexEnvironmentContextBodyAt(body, time.Now())
+	return rewriteCodexEnvironmentContextBodyWithTimezone(body, codexEnvironmentContextDefaultTimezone)
+}
+
+func rewriteCodexEnvironmentContextBodyWithTimezone(body []byte, timezone string) ([]byte, bool, error) {
+	return rewriteCodexEnvironmentContextBodyWithTimezoneAt(body, time.Now(), timezone)
 }
 
 func rewriteCodexEnvironmentContextBodyAt(body []byte, now time.Time) ([]byte, bool, error) {
+	return rewriteCodexEnvironmentContextBodyWithTimezoneAt(body, now, codexEnvironmentContextDefaultTimezone)
+}
+
+func rewriteCodexEnvironmentContextBodyWithTimezoneAt(body []byte, now time.Time, timezone string) ([]byte, bool, error) {
 	if len(body) == 0 {
 		return body, false, nil
 	}
@@ -109,7 +142,7 @@ func rewriteCodexEnvironmentContextBodyAt(body []byte, now time.Time) ([]byte, b
 		return body, false, fmt.Errorf("decode Codex environment context: expected a JSON object")
 	}
 
-	currentDate, timezone := codexEnvironmentContextValues(now)
+	currentDate, timezone := codexEnvironmentContextValues(now, timezone)
 	found := false
 	changed := false
 	var visit func(any)

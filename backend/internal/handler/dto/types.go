@@ -465,6 +465,7 @@ type ProxyWithAccountCount struct {
 	CountryCode    string `json:"country_code,omitempty"`
 	Region         string `json:"region,omitempty"`
 	City           string `json:"city,omitempty"`
+	Timezone       string `json:"timezone,omitempty"`
 	QualityStatus  string `json:"quality_status,omitempty"`
 	QualityScore   *int   `json:"quality_score,omitempty"`
 	QualityGrade   string `json:"quality_grade,omitempty"`
@@ -491,6 +492,7 @@ type AdminProxyWithAccountCount struct {
 	CountryCode    string `json:"country_code,omitempty"`
 	Region         string `json:"region,omitempty"`
 	City           string `json:"city,omitempty"`
+	Timezone       string `json:"timezone,omitempty"`
 	QualityStatus  string `json:"quality_status,omitempty"`
 	QualityScore   *int   `json:"quality_score,omitempty"`
 	QualityGrade   string `json:"quality_grade,omitempty"`

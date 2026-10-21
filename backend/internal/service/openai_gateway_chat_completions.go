@@ -264,7 +264,10 @@ func (s *OpenAIGatewayService) forwardAsChatCompletions(
 
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
 	if isCodexCLI {
-		normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBody(responsesBody)
+		normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBodyWithTimezone(
+			responsesBody,
+			s.codexEnvironmentContextTimezone(ctx, account),
+		)
 		if contextErr != nil {
 			return nil, contextErr
 		}

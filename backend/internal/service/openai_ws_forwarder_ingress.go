@@ -264,7 +264,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 		if isCodexCLI {
-			normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBody(normalized)
+			normalizedBody, contextChanged, contextErr := rewriteCodexEnvironmentContextBodyWithTimezone(
+				normalized,
+				s.codexEnvironmentContextTimezone(ctx, account),
+			)
 			if contextErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,

@@ -10,10 +10,41 @@ import (
 func TestCodexEnvironmentContextValuesConvertServerInstantToUSPacificDate(t *testing.T) {
 	now := time.Date(2026, 1, 2, 1, 30, 0, 0, time.UTC)
 
-	currentDate, timezone := codexEnvironmentContextValues(now)
+	currentDate, timezone := codexEnvironmentContextValues(now, codexEnvironmentContextDefaultTimezone)
 
 	require.Equal(t, "2026-01-01", currentDate)
 	require.Equal(t, "America/Los_Angeles", timezone)
+}
+
+func TestCodexEnvironmentContextValuesUseProxyTimezone(t *testing.T) {
+	now := time.Date(2026, 1, 2, 1, 30, 0, 0, time.UTC)
+
+	currentDate, timezone := codexEnvironmentContextValues(now, "Asia/Tokyo")
+
+	require.Equal(t, "2026-01-02", currentDate)
+	require.Equal(t, "Asia/Tokyo", timezone)
+}
+
+func TestCodexEnvironmentContextValuesFallbackForInvalidTimezone(t *testing.T) {
+	now := time.Date(2026, 1, 2, 1, 30, 0, 0, time.UTC)
+
+	currentDate, timezone := codexEnvironmentContextValues(now, "Not/A/Timezone")
+
+	require.Equal(t, "2026-01-01", currentDate)
+	require.Equal(t, "America/Los_Angeles", timezone)
+}
+
+func TestRewriteCodexEnvironmentContextBodyUsesProxyTimezone(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"type":"message","role":"user","content":"<environment_context>\n  <cwd>/workspace</cwd>\n  <current_date>2026-01-01</current_date>\n  <timezone>Asia/Shanghai</timezone>\n</environment_context>"}]}`)
+	now := time.Date(2026, 1, 2, 1, 30, 0, 0, time.UTC)
+
+	rewritten, changed, err := rewriteCodexEnvironmentContextBodyWithTimezoneAt(body, now, "Asia/Tokyo")
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Contains(t, string(rewritten), "<current_date>2026-01-02</current_date>")
+	require.Contains(t, string(rewritten), "<timezone>Asia/Tokyo</timezone>")
+	require.NotContains(t, string(rewritten), "Asia/Shanghai")
 }
 
 func TestRewriteCodexEnvironmentContextBodyReplacesDateAndTimezone(t *testing.T) {
