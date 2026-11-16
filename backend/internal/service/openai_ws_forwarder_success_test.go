@@ -876,8 +876,8 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthSanitizesInvalidNativeToolItemID
 func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// WS 握手头与 HTTP 出站共用身份收口：同样强制统一为网关规范身份，
-	// 客户端自报的 originator / user-agent 不参与构造（issue #3901 的配对不变式自然满足）。
+	// WS and HTTP preserve the same official UA and pair its originator;
+	// incomplete UAs use the configured compatibility fingerprint.
 	tests := []struct {
 		name       string
 		userAgent  string
@@ -895,15 +895,15 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 			name:       "mismatched originator",
 			userAgent:  "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
 			originator: "codex_cli_rs",
-			wantUA:     codexCLIUserAgent,
-			wantOrigin: openai.CodexDefaultOriginator,
+			wantUA:     "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
+			wantOrigin: "codex_vscode",
 		},
 		{
 			name:       "tui identity",
 			userAgent:  "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 			originator: "codex-tui",
-			wantUA:     codexCLIUserAgent,
-			wantOrigin: openai.CodexDefaultOriginator,
+			wantUA:     "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
+			wantOrigin: "codex-tui",
 		},
 		{
 			name:       "official originator without ua",
@@ -982,7 +982,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 }
 
 // 账号级自定义 UA 是管理员的显式配置，WS 握手与 HTTP 出站必须一视同仁地生效——
-// 否则同一个账号在两种传输上以不同身份出站。指纹保留、版本段重建、originator 配套。
+// 否则同一个账号在两种传输上以不同身份出站。保留 TUI 身份及指纹，CLI 版本跟随设置。
 func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -1042,12 +1042,12 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthHonorsAccountUserAgent(t *testin
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, openai.CodexCLIOriginator, captureDialer.lastHeaders.Get("originator"))
+	require.Equal(t, openai.CodexTUIOriginator, captureDialer.lastHeaders.Get("originator"))
 	require.Equal(t,
-		"codex_cli_rs/"+codexCLIVersion+" (Mac OS X 15.1.0; arm64) iTerm.app",
+		"codex-tui/"+codexCLIVersion+" (Mac OS X 15.1.0; arm64) iTerm.app",
 		captureDialer.lastHeaders.Get("user-agent"),
 	)
-	require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
+	require.Empty(t, captureDialer.lastHeaders.Get("version"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheKey(t *testing.T) {

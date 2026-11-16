@@ -109,7 +109,8 @@ func TestCodexClientProfileKeepsExplicitAccountUA(t *testing.T) {
 	enforceCodexIdentityHeadersWithProfile(h, "codex_cli_rs/0.150.0 (Ubuntu 22.4.0; x86_64) xterm-256color", codexClientProfileForKind(codexClientProfileWindowsDesktop))
 	require.Equal(t, openai.CodexDefaultOriginator, h.Get("originator"))
 	require.Contains(t, h.Get("user-agent"), "Ubuntu 22.4.0; x86_64")
-	require.Equal(t, codexCLIVersion, h.Get("version"))
+	require.Contains(t, h.Get("user-agent"), "/"+codexCLIVersion+" ")
+	require.Empty(t, h.Get("version"))
 }
 
 func TestOpenAIWSEffectiveTurnMetadataPrefersPayloadThenHeader(t *testing.T) {

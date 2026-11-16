@@ -10,9 +10,9 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// Fixed Codex personas used for native OAuth inference. The downstream client
-// family is selected from the request headers and the turn metadata body. A
-// client we cannot identify falls back to the Ubuntu CLI persona.
+// Native Codex identity preserves the official client's UA, including its
+// engine version, platform and client build trailer. Fixed profiles are only
+// used when the UA is missing/invalid or ForceCodexCLI explicitly requests one.
 type codexClientProfileKind int
 
 const (
@@ -23,15 +23,15 @@ const (
 
 const (
 	codexWindowsCLIUserAgentSuffix = " (Windows 10.0.26200; x86_64) WindowsTerminal"
-	// Observed Codex Desktop 0.163.0-alpha.10.2 on Windows. The desktop app has
+	// Observed Codex Desktop 0.169.0-alpha.11.1 on Windows. The desktop app has
 	// a different release train and a `(Codex Desktop; build)` UA trailer, so it
 	// must not be rebuilt from the CLI version.
-	codexWindowsDesktopUserAgent = "Codex Desktop/0.163.0-alpha.10.2 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.1013.40934)"
+	codexWindowsDesktopUserAgent = "Codex Desktop/0.169.0-alpha.11.1 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.1111.21308)"
 )
 
 const (
 	codexWindowsDesktopOriginator = "Codex Desktop"
-	codexWindowsDesktopVersion    = "0.163.0-alpha.10.2"
+	codexWindowsDesktopVersion    = "0.169.0-alpha.11.1"
 )
 
 type codexClientProfile struct {
@@ -120,29 +120,83 @@ func resolveCodexClientProfileWithMetadata(c *gin.Context, metadataRaw string) c
 		userAgent = strings.TrimSpace(c.GetHeader("user-agent"))
 		originator = strings.TrimSpace(c.GetHeader("originator"))
 	}
-	return codexClientProfileForKind(detectCodexClientProfileKind(userAgent, originator, metadataRaw))
+	if profile, ok := codexClientProfileFromUserAgent(userAgent); ok {
+		return profile
+	}
+	profile := codexClientProfileForKind(detectCodexClientProfileKind(userAgent, originator, metadataRaw))
+	// TUI and exec register their own clientInfo.name during initialization.
+	// Recover that identity when a proxy omitted the complete UA; unknown
+	// clients still use the library's codex_cli_rs fallback.
+	if profile.kind != codexClientProfileWindowsDesktop {
+		if uaOriginator, _, ok := openai.PairCodexClientIdentity(userAgent); ok {
+			originator = uaOriginator
+		}
+		for _, name := range []string{openai.CodexTUIOriginator, "codex_exec"} {
+			if strings.EqualFold(originator, name) {
+				suffix := codexCLIUserAgentSuffix
+				if profile.kind == codexClientProfileWindowsCLI {
+					suffix = codexWindowsCLIUserAgentSuffix
+				}
+				profile.originator = name
+				profile.userAgent = name + "/" + profile.version + suffix + " (" + name + "; " + profile.version + ")"
+				break
+			}
+		}
+	}
+	return profile
+}
+
+// codexClientProfileFromUserAgent only preserves complete, header-safe official
+// UAs. Bare identity/version tokens use the configured fallback fingerprint.
+// Desktop's trailer is an app build, independent of the engine version, so it
+// must never be passed through SetCodexUserAgentVersion here.
+func codexClientProfileFromUserAgent(userAgent string) (codexClientProfile, bool) {
+	originator, ua, ok := openai.PairCodexClientIdentity(userAgent)
+	if !ok {
+		return codexClientProfile{}, false
+	}
+	version := NormalizeCodexClientVersion(openai.CodexUserAgentVersion(ua))
+	if version == "" {
+		return codexClientProfile{}, false
+	}
+	fingerprint := strings.TrimPrefix(ua, originator+"/"+version+" ")
+	closeOS := strings.IndexByte(fingerprint, ')')
+	if !strings.HasPrefix(fingerprint, "(") || closeOS < 0 ||
+		!strings.Contains(fingerprint[:closeOS], ";") || strings.TrimSpace(fingerprint[closeOS+1:]) == "" {
+		return codexClientProfile{}, false
+	}
+	kind := codexClientProfileUbuntuCLI
+	if strings.HasPrefix(originator, "Codex ") || originator == "codex_chatgpt_desktop" {
+		kind = codexClientProfileWindowsDesktop
+	} else if strings.Contains(strings.ToLower(fingerprint[:closeOS]), "windows") {
+		kind = codexClientProfileWindowsCLI
+	}
+	return codexClientProfile{kind: kind, originator: originator, userAgent: ua, version: version}, true
 }
 
 func detectCodexClientProfileKind(userAgent, originator, metadataRaw string) codexClientProfileKind {
+	if profile, ok := codexClientProfileFromUserAgent(userAgent); ok {
+		return profile.kind
+	}
 	ua := strings.ToLower(strings.TrimSpace(userAgent))
 	origin := strings.ToLower(strings.TrimSpace(originator))
 	metadata := parseCodexClientProfileMetadata(metadataRaw)
 
-	// Strong body signals win because client_metadata is the canonical Codex
-	// snapshot; direct headers are only compatibility projections.
+	// Metadata identifies the fallback client when no complete official UA is
+	// available. Workspace paths describe the execution host, which can differ
+	// from the UI's OS, so they must not override a valid client UA.
 	if strings.Contains(strings.ToLower(metadata.ClientType), "desktop") {
 		return codexClientProfileWindowsDesktop
 	}
-	if codexMetadataHasWindowsWorkspace(metadata) {
-		return codexClientProfileWindowsCLI
-	}
-
 	desktop := strings.HasPrefix(ua, "codex desktop/") ||
 		strings.Contains(ua, "(codex desktop;") ||
 		origin == "codex desktop" ||
 		origin == "codex_chatgpt_desktop"
 	if desktop {
 		return codexClientProfileWindowsDesktop
+	}
+	if codexMetadataHasWindowsWorkspace(metadata) {
+		return codexClientProfileWindowsCLI
 	}
 
 	windows := (strings.HasPrefix(ua, strings.ToLower(openai.CodexDefaultOriginator)+"/") && strings.Contains(ua, "windows")) ||
@@ -215,23 +269,26 @@ func codexClientProfileForKind(kind codexClientProfileKind) codexClientProfile {
 }
 
 // enforceCodexIdentityHeadersWithProfile is the native inference terminal
-// identity step. It applies the selected fixed persona unless an account-level
-// custom UA is configured; the latter remains an explicit administrator
-// override and is paired using the legacy reconstruction path.
+// identity step. Explicit account UAs take priority; otherwise it uses the
+// preserved client identity or the selected fallback. Native inference never
+// adds a legacy Version header, including for account-level overrides.
 func enforceCodexIdentityHeadersWithProfile(h http.Header, overrideUA string, profile codexClientProfile) {
 	if h == nil || h.Get("originator") == "" {
 		return
 	}
 	if !codexIdentityEnforcement.Load() {
 		pairCodexIdentityHeaders(h)
+		h.Del("version")
 		return
 	}
-	if strings.TrimSpace(overrideUA) != "" {
-		identity := resolveCodexOutboundIdentity(overrideUA)
-		h.Set("user-agent", identity.userAgent)
-		h.Set("originator", identity.originator)
-		h.Set("version", identity.version)
-		return
+	if override, ok := codexClientProfileFromUserAgent(overrideUA); ok {
+		// Account CLI fingerprints retain their existing version-sync policy.
+		// Desktop has a separate engine/build release train; preserve both.
+		if override.kind != codexClientProfileWindowsDesktop {
+			override.version = CodexCanonicalClientVersion()
+			override.userAgent = openai.SetCodexUserAgentVersion(override.userAgent, override.version)
+		}
+		profile = override
 	}
 	if strings.TrimSpace(profile.userAgent) == "" {
 		profile = codexClientProfileForKind(codexClientProfileUbuntuCLI)

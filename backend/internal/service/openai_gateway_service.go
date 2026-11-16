@@ -37,10 +37,9 @@ const (
 	// {originator}/{version} ({OS} {OS_version}; {arch}) {terminal}
 	// 缺少 OS/架构/终端后缀的形态易被上游指纹识别为非官方客户端。
 	// 该后缀是 UA 形态的唯一定义处，buildCodexCLIUserAgent 按运行时版本号复用它。
-	codexCLIUserAgentSuffix = " (Ubuntu 22.4.0; x86_64) xterm-256color"
-	// codexCLIUserAgent 是编译期兜底 UA；运行时优先使用由后台版本号拼出的规范 UA。
-	// 版本段必须来自 codexCLIVersion：UA 与 version 头是同一个版本声明的两个出口，
-	// 各自硬编码会漂移成互相矛盾的身份。
+	codexCLIUserAgentSuffix = " (Ubuntu 24.4.0; x86_64) xterm-256color"
+	// codexCLIUserAgent is the library/compatibility fallback. Complete native
+	// client UAs are resolved separately and retain their own engine/build.
 	codexCLIUserAgent = openai.CodexDefaultOriginator + "/" + codexCLIVersion + codexCLIUserAgentSuffix
 	// codex_cli_only 拒绝时单个请求头日志长度上限（字符）
 	codexCLIOnlyHeaderValueMaxBytes = 256
@@ -56,12 +55,10 @@ const (
 	openAIWSRetryJitterRatioDefault    = 0.2
 	openAICompactSessionSeedKey        = "openai_compact_session_seed"
 	openAIUpstreamEndpointContextKey   = "openai_actual_upstream_endpoint"
-	// codexCLIVersion 是网关对上游声明的 Codex 客户端版本，同时供 codexCLIUserAgent
-	// 与 version 头使用。上游 /backend-api/codex 会按客户端身份进行风控分层，
-	// 陈旧版本可能被优先丢弃（HTTP 200 + 流内 server_is_overloaded）；非官方客户端配不出
-	// 官方身份时整体回退到本常量，因此它必须跟随官方 CLI 的当前发布版本，
-	// 落后多个版本会让这些请求稳定落在被优先丢弃的一侧。
-	codexCLIVersion = "0.146.0"
+	// codexCLIVersion pins the latest verified CLI release for missing-client
+	// fallbacks and probes. Runtime version settings can override that fallback;
+	// they must not replace a native Desktop client's independent build trailer.
+	codexCLIVersion = "0.169.0"
 	// Codex 限额快照仅用于后台展示/诊断，不需要每个成功请求都立即落库。
 	openAICodexSnapshotPersistMinInterval = 30 * time.Second
 	// 配额自动暂停时，超过该时长仍未刷新的 used% 快照视为陈旧，不再据此暂停账号。

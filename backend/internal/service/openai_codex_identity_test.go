@@ -196,7 +196,7 @@ func TestEnforceCodexIdentityHeadersFollowsCanonicalResolver(t *testing.T) {
 	enforceCodexIdentityHeaders(h)
 
 	require.Equal(t, "codex_cli_rs", h.Get("originator"))
-	require.Equal(t, "codex_cli_rs/0.200.1 (Ubuntu 22.4.0; x86_64) xterm-256color", h.Get("user-agent"))
+	require.Equal(t, "codex_cli_rs/0.200.1 (Ubuntu 24.4.0; x86_64) xterm-256color", h.Get("user-agent"))
 	require.Equal(t, "0.200.1", h.Get("version"))
 }
 

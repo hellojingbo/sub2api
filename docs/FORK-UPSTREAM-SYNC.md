@@ -1,5 +1,17 @@
 # Fork 上游同步记录
 
+## 2026-11-16：原生 Codex UA 修复
+
+- 对照官方 `rust-v0.169.0` 的 TUI / exec 初始化和 UA 构造逻辑，原生 HTTP、透传 HTTP、WebSocket 保留完整合法官方 UA 的客户端名、引擎版本、系统、终端和尾标，并从 UA 配对 originator。
+- Linux 采集值 `codex-tui/0.169.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex-tui; 0.169.0)` 不再被改成 codex_cli_rs，也不再丢失 TUI 尾标。
+- Desktop 采集值 `Codex Desktop/0.169.0-alpha.11.1 (Windows 10.0.26200; x86_64) unknown (Codex Desktop; 26.1111.21308)` 完整保留。未来客户端携带的新版本和 build 同样沿用；该采集值仅作为缺失 UA 时的 Desktop 回退模板。
+- 真实官方 UA 优先确定客户端身份；工作区路径描述执行环境，不能把 Linux TUI 或 macOS Desktop 改装成 Windows 客户端。缺失完整 UA 时再参考 body 元数据、header 元数据及 originator 选择回退。
+- 只有 originator 或不完整 UA 时，codex-tui / codex_exec 分别生成自己的回退 UA 和尾标；无法识别的客户端使用库级 codex_cli_rs 回退。回退 CLI 基线更新到 0.169.0 / Ubuntu 24.4.0，仍支持版本设置及自动同步。
+- 显式 ForceCodexCLI 保持最高优先级；账号级完整 UA 覆盖次之。账号 CLI 指纹继续跟随后台版本设置，保留 TUI/exec 身份；账号 Desktop 覆盖保留其独立引擎版本和 app build。
+- 原生推理的全部身份分支均不添加 legacy Version 头；后台鉴权、模型探测等无具体客户端的兼容路径继续使用原有规范身份机制。
+- 增加两条真实采集值、后续 Desktop build、TUI/exec、跨系统工作区、缺失/非法 UA、显式覆盖及 HTTP/WS 一致性回归。此次修复范围为 UA 与 originator 配对，账号隔离、请求压缩及其他请求处理保持原有策略。
+- 验证：Go 1.27.3 服务层 unit 测试通过（全进程堆快照用例独立通过）；UA 定向、OpenAI 身份与请求压缩回归通过；首 token 耗时用例首轮出现 1ms 边界波动，连续复测 3 次及最终整包执行均通过；Linux amd64 含前端 embed 构建通过并核验 ELF 文件头。本次未部署或进行真实上游调用。
+
 ## v0.2.21
 
 - 上游：`Wei-Shaw/sub2api` 的 `v0.2.21` 标签，提交 `10ba8f9b4`。

@@ -258,8 +258,8 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeadersWithProfileMetadata(
 	if s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
 		headers.Set("user-agent", CodexCanonicalUserAgent())
 	}
-	// 终态收口：WS 握手与 HTTP 出站共用同一套身份语义，账号级自定义 UA 同样作为
-	// 管理员显式配置传入（上面写进 headers 的值只在强制统一被关闭时才参与配对）。
+	// WS and HTTP share native client preservation, paired originators and
+	// explicit account overrides. ForceCodexCLI retains its higher priority.
 	if account != nil && account.UsesOpenAICodexProtocol() {
 		forceCLI := s != nil && s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
 		profile := resolveCodexClientProfileFromTurnMetadata(c, profileTurnMetadata, forceCLI)

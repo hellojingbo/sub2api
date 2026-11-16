@@ -3353,8 +3353,8 @@ func TestOpenAIBuildUpstreamRequestPreservesCodexIdentityHeaders(t *testing.T) {
 func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// 强制统一出口：客户端自报的 originator / User-Agent 都不参与上游身份构造，
-	// 一律改写为网关规范身份，天然满足 originator 与 UA 首段配套的上游校验（issue #3901）。
+	// Complete official client UAs keep their identity; mismatched originators
+	// are paired from the UA. Incomplete and third-party UAs use a fallback.
 	tests := []struct {
 		name       string
 		userAgent  string
@@ -3372,15 +3372,15 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 			name:       "mismatched originator",
 			userAgent:  "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
 			originator: "codex_cli_rs",
-			wantUA:     codexCLIUserAgent,
-			wantOrigin: openai.CodexDefaultOriginator,
+			wantUA:     "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)",
+			wantOrigin: "codex_vscode",
 		},
 		{
 			name:       "tui identity",
 			userAgent:  "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 			originator: "codex-tui",
-			wantUA:     codexCLIUserAgent,
-			wantOrigin: openai.CodexDefaultOriginator,
+			wantUA:     "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
+			wantOrigin: "codex-tui",
 		},
 		{
 			name:       "official originator without ua",

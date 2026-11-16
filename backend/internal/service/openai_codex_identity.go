@@ -41,11 +41,10 @@ func buildCodexCLIUserAgent(version string) string {
 	return openai.CodexDefaultOriginator + "/" + version + codexCLIUserAgentSuffix
 }
 
-// codexIdentityEnforcement 控制 enforceCodexIdentityHeaders 是否强制统一出站身份，
-// 由 gateway.disable_codex_identity_enforcement 在服务构造时取反发布。
-// 默认开启：上游会按客户端身份进行风控分层，命中风险身份的请求会拿到
-// HTTP 200 + 流内 server_is_overloaded，本次请求即失败；强制统一出口可确保没有
-// 请求带着第三方或陈旧身份出站。关闭后退回「仅按最终 UA 配对 originator」的收口语义。
+// codexIdentityEnforcement enables gateway identity handling, published from
+// gateway.disable_codex_identity_enforcement. Native inference preserves a
+// complete official client profile; compatibility/probe paths use a canonical
+// fallback. When disabled, only the final UA/originator pair is reconciled.
 var codexIdentityEnforcement = func() *atomic.Bool {
 	v := &atomic.Bool{}
 	v.Store(true)
@@ -119,8 +118,8 @@ func codexCanonicalUserAgent() string {
 				return codexCLIUserAgent
 			}
 			// The settings resolver may still contain a historical TUI or
-			// desktop fingerprint. The native OAuth wire identity is always the
-			// CLI shape; only the synchronized version is reused here.
+			// desktop fingerprint. Requests without a concrete client use the
+			// library CLI fallback; native requests resolve their own profile.
 			return buildCodexCLIUserAgent(codexClientVersionFromUA(ua))
 		}
 	}

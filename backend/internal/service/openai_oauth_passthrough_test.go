@@ -2034,10 +2034,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
-// 透传模式的 OAuth 与非透传一致：官方客户端身份同样被强制统一为网关规范身份，
-// originator 与 UA 首段天然配套，不会出现历史上 originator/UA 错配被上游 404 的形态
-// （issue #3901）。
-func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityUnified(t *testing.T) {
+// Passthrough preserves an official UA and repairs a mismatched originator.
+func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityPreserved(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	const tuiUA = "codex_vscode/0.140.2 (Mac OS X 14.0; arm64) vscode (codex_vscode; 0.140.2)"
@@ -2079,19 +2077,19 @@ func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityUnified(t *testin
 	_, err := svc.Forward(context.Background(), c, account, inputBody)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, openai.CodexDefaultOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, tuiUA, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "codex_vscode", upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("version"), "native Codex inference does not send the legacy version header")
 }
 
-// 透传模式下真实 TUI 客户端的身份同样被统一：被优先降载的身份不会带到上游。
-func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityUnified(t *testing.T) {
+// The captured Linux TUI identity must survive full passthrough forwarding.
+func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityPreserved(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
-	c.Request.Header.Set("User-Agent", "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)")
+	c.Request.Header.Set("User-Agent", capturedLinuxTUIUserAgent)
 	c.Request.Header.Set("originator", "codex-tui")
 
 	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
@@ -2123,8 +2121,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityUnified(t *testin
 	_, err := svc.Forward(context.Background(), c, account, inputBody)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, openai.CodexDefaultOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, capturedLinuxTUIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, openai.CodexTUIOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("version"), "native Codex inference does not send the legacy version header")
 }
 
