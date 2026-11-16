@@ -314,6 +314,16 @@ func TestFilterCodexInputPreservesOfficialNativeIDs(t *testing.T) {
 	require.Equal(t, "call_2", filtered[3].(map[string]any)["call_id"])
 	require.Equal(t, "fc_output", filtered[4].(map[string]any)["id"])
 	require.Equal(t, "call_2", filtered[4].(map[string]any)["call_id"])
+
+	// The shared HTTP passthrough / WS normalizer must also preserve valid
+	// native replay items while applying the newer upstream compatibility rules.
+	body, err := json.Marshal(map[string]any{"model": "gpt-5.3-codex", "input": input})
+	require.NoError(t, err)
+	normalized, _, err := normalizeOpenAIResponsesWebSocketCompatibilityBodyWithConfigAndItemIDs(
+		&config.Config{}, body, &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, false, true,
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, gjson.GetBytes(body, "input").Raw, gjson.GetBytes(normalized, "input").Raw)
 }
 
 func TestFilterCodexInputStripsInvalidNativeIDs(t *testing.T) {
@@ -407,4 +417,65 @@ func TestForwardOfficialCodexDoesNotSynthesizeInstructions(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal(upstream.lastBody, &decoded))
 	require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
+}
+
+// Keep the native request policy while applying upstream #7978: OAuth always
+// requests SSE upstream, but the caller still chooses its response format.
+func TestForwardOfficialCodexPassthroughPreservesNativeRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name   string
+		stream bool
+	}{
+		{name: "non_streaming", stream: false},
+		{name: "streaming", stream: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(map[string]any{
+				"model":  "gpt-5.3-codex",
+				"stream": tc.stream,
+				"input":  "Reply with exactly OK.",
+			})
+			require.NoError(t, err)
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
+			c.Request.Header.Set("User-Agent", codexWindowsDesktopUserAgent)
+			c.Request.Header.Set("originator", codexWindowsDesktopOriginator)
+			c.Request.Header.Set("session-id", "019a0234-5678-7abc-8def-0123456789ab")
+			c.Request.Header.Set("thread-id", c.GetHeader("session-id"))
+			c.Request.Header.Set("x-client-request-id", c.GetHeader("session-id"))
+			upstream := &httpUpstreamRecorder{resp: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(strings.NewReader(openAINonStreamRegressionSSE)),
+			}}
+			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			account := &Account{
+				ID:          1,
+				Platform:    PlatformOpenAI,
+				Type:        AccountTypeOAuth,
+				Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
+				Extra:       map[string]any{"openai_passthrough": true},
+			}
+			result, err := svc.Forward(context.Background(), c, account, body)
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, tc.stream, result.Stream)
+			require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+			require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
+			require.Equal(t, codexWindowsDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+			require.Equal(t, codexWindowsDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+			require.Empty(t, upstream.lastReq.Header.Get("Version"))
+			require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
+			require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
+			require.Equal(t, upstream.lastReq.Header.Get("session-id"), upstream.lastReq.Header.Get("thread-id"))
+			require.Equal(t, upstream.lastReq.Header.Get("session-id"), upstream.lastReq.Header.Get("x-client-request-id"))
+			if tc.stream {
+				require.Contains(t, rec.Body.String(), "event: response.completed")
+			} else {
+				requireSingleJSONResponsesObject(t, rec)
+			}
+		})
+	}
 }

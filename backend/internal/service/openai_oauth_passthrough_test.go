@@ -887,7 +887,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCance
 	require.NoError(t, upstream.lastReq.Context().Err())
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefault(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_CompatibilityCodexMissingInstructionsGetsDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	for _, stream := range []bool{false, true} {
@@ -906,7 +906,9 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsGetsDefau
 				responseContentType = "application/json"
 			}
 			c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(nil))
-			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+			// Default instructions are synthesized for compatibility callers;
+			// native Codex requests retain the client's original instructions.
+			c.Request.Header.Set("User-Agent", "compat-client/1.0")
 
 			originalBody := []byte(fmt.Sprintf(`{"model":"gpt-5.1-codex-max","stream":%t,"store":true,"input":[{"type":"text","text":"hi"}]}`, stream))
 			upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -1173,7 +1175,7 @@ func TestOpenAIGatewayService_OAuthLegacy_CompositeCodexUAUsesCodexOriginator(t 
 	_, err := svc.Forward(context.Background(), c, account, inputBody)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	// 浏览器型复合 UA 被替换为默认 Codex TUI UA，
+	// 浏览器型复合 UA 被替换为默认 Codex CLI UA，
 	// originator 随最终 UA 配套（issue #3901）。
 	require.Equal(t, DefaultOpenAICodexUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, openai.CodexDefaultOriginator, upstream.lastReq.Header.Get("originator"))
