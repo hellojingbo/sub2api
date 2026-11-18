@@ -1,5 +1,15 @@
 # Fork 上游同步记录
 
+## v0.2.23
+
+- 合入上游 `v0.2.23`（`5af9afb588c4b014b3df9db7d4073af1f8ae01b6`），相对 v0.2.21 新增 219 个提交；合并前 fork 为 `70b6f6216`。保留已有提交历史，版本更新为 `0.2.23-dev`，Go 工具链升级到 1.27.4。
+- 上游标签内 VERSION 为上一版 0.2.22；fork 合并提交通过显式 VERSION 值声明 0.2.23-dev。
+- 原生 TUI / exec / Desktop UA 保留、Desktop 独立 build、账号与会话关系、代理时区、zstd 及手动请求采集沿用现有设计。
+- 会话缓存键采用上游新规则：对比 body session_id 和客户端原始 session-id。临时分叉保留父会话缓存键，同时保留自己的 body 会话身份；回归同时验证连字符 session-id，避免只比较两个缺失的旧 session_id 头。
+- 合并上游 additional_tools 声明 UUID 与引用映射，同时保留原生调用 ID 的保护条件。相应用例按真实 TUI 请求验证声明归一化及原生 message/reasoning ID 保留，兼容路径的默认清理规则继续由既有用例覆盖。
+- 纳入流式空闲超时与首输出切换预算、Ultrafast 分组和渠道计价等上游更新。新增 3 项迁移：分组 Ultrafast 开关、分组用量汇总重建状态/失效函数、渠道 Ultrafast 价格倍率。
+- 部署仍校验镜像/二进制版本、ELF 与执行权限、健康、前端资源、数据挂载及迁移器 TrimSpace 后的 SQL 校验和；部署前备份数据库、Redis、应用数据与配置，并保留旧镜像。
+
 ## 2026-11-16：原生 Codex UA 修复
 
 - 对照官方 `rust-v0.169.0` 的 TUI / exec 初始化和 UA 构造逻辑，原生 HTTP、透传 HTTP、WebSocket 保留完整合法官方 UA 的客户端名、引擎版本、系统、终端和尾标，并从 UA 配对 originator。
