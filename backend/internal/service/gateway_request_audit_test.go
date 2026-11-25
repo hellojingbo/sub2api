@@ -46,11 +46,11 @@ func (s *gatewayRequestAuditStoreStub) Append(_ context.Context, record *Gateway
 	return true, nil
 }
 
-func (s *gatewayRequestAuditStoreStub) List(context.Context) ([]*GatewayRequestAuditRecord, error) {
-	if s.record == nil {
-		return nil, nil
+func (s *gatewayRequestAuditStoreStub) List(_ context.Context, offset int64, limit int) ([]GatewayRequestAuditSummary, int64, error) {
+	if s.record == nil || offset > 0 || limit < 1 {
+		return nil, int64(s.state.Count), nil
 	}
-	return []*GatewayRequestAuditRecord{s.record}, nil
+	return []GatewayRequestAuditSummary{s.record.Summary()}, int64(s.state.Count), nil
 }
 
 func (s *gatewayRequestAuditStoreStub) Get(context.Context, string) (*GatewayRequestAuditRecord, error) {

@@ -119,7 +119,7 @@ export default adminAPI
 
 // Re-export types used by components
 export type { AuditLog, AuditLogQuery, AuditLogListResponse } from './audit'
-export type { GatewayRequestAuditState, GatewayRequestAuditRecord, GatewayRequestHeaders } from './gatewayRequestAudit'
+export type { GatewayRequestAuditState, GatewayRequestAuditSummary, GatewayRequestAuditRecord, GatewayRequestHeaders } from './gatewayRequestAudit'
 export type { BalanceHistoryItem } from './users'
 export type { ErrorPassthroughRule, CreateRuleRequest, UpdateRuleRequest } from './errorPassthrough'
 export type { BackupAgentHealth, DataManagementConfig } from './dataManagement'

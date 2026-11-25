@@ -30,6 +30,7 @@ export default {
     },
     detail: {
       title: '请求采集详情',
+      loadFailed: '加载请求采集详情失败',
       downstream: '下游请求',
       upstream: '上游请求',
       headers: 'Headers 对照',

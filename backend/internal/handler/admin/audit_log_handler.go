@@ -78,14 +78,16 @@ func (h *AuditLogHandler) GatewayRequestAuditClear(c *gin.Context) {
 	response.Success(c, gin.H{"cleared": true})
 }
 
-// GatewayRequestAuditList 返回当前采集会话中的全部请求。
+// GatewayRequestAuditList 返回当前采集会话中一页请求摘要。
 func (h *AuditLogHandler) GatewayRequestAuditList(c *gin.Context) {
-	records, err := h.gatewayRequestAudit.List(c.Request.Context())
+	page, pageSize := response.ParsePagination(c)
+	pageSize = min(pageSize, 100)
+	records, total, err := h.gatewayRequestAudit.List(c.Request.Context(), int64(page-1)*int64(pageSize), pageSize)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Success(c, records)
+	response.Paginated(c, records, total, page, pageSize)
 }
 
 // GatewayRequestAuditGet 返回一条上下游对照详情。

@@ -1,4 +1,5 @@
 import { apiClient } from '../client'
+import type { PaginatedResponse } from '@/types'
 
 export interface GatewayRequestAuditState {
   active: boolean
@@ -11,21 +12,24 @@ export interface GatewayRequestAuditState {
 
 export type GatewayRequestHeaders = Record<string, string[]>
 
-export interface GatewayRequestAuditRecord {
+export interface GatewayRequestAuditSummary {
   id: string
   captured_at: string
-  session_id: string
   transport: string
   account_id?: number
   account_name?: string
-  request_id?: string
   downstream_method: string
   downstream_url: string
+  upstream_method: string
+  upstream_url: string
+}
+
+export interface GatewayRequestAuditRecord extends GatewayRequestAuditSummary {
+  session_id: string
+  request_id?: string
   downstream_headers: GatewayRequestHeaders
   downstream_body?: string
   downstream_body_codec?: string
-  upstream_method: string
-  upstream_url: string
   upstream_headers: GatewayRequestHeaders
   upstream_body?: string
   upstream_body_codec?: string
@@ -33,8 +37,8 @@ export interface GatewayRequestAuditRecord {
   upstream_wire_body_codec?: string
 }
 
-export async function state(): Promise<GatewayRequestAuditState> {
-  const { data } = await apiClient.get('/admin/gateway-request-audit/state')
+export async function state(signal?: AbortSignal): Promise<GatewayRequestAuditState> {
+  const { data } = await apiClient.get('/admin/gateway-request-audit/state', { signal })
   return data
 }
 
@@ -53,13 +57,16 @@ export async function clear(): Promise<{ cleared: boolean }> {
   return data
 }
 
-export async function list(): Promise<GatewayRequestAuditRecord[]> {
-  const { data } = await apiClient.get('/admin/gateway-request-audit/records')
+export async function list(page: number, pageSize: number, signal?: AbortSignal): Promise<PaginatedResponse<GatewayRequestAuditSummary>> {
+  const { data } = await apiClient.get('/admin/gateway-request-audit/records', {
+    params: { page, page_size: pageSize },
+    signal
+  })
   return data
 }
 
-export async function get(id: string): Promise<GatewayRequestAuditRecord> {
-  const { data } = await apiClient.get(`/admin/gateway-request-audit/records/${encodeURIComponent(id)}`)
+export async function get(id: string, signal?: AbortSignal): Promise<GatewayRequestAuditRecord> {
+  const { data } = await apiClient.get(`/admin/gateway-request-audit/records/${encodeURIComponent(id)}`, { signal })
   return data
 }
 

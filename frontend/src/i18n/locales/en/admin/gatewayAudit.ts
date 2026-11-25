@@ -30,6 +30,7 @@ export default {
     },
     detail: {
       title: 'Request capture details',
+      loadFailed: 'Unable to load request capture details',
       downstream: 'Downstream request',
       upstream: 'Upstream request',
       headers: 'Header comparison',

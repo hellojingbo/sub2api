@@ -22,7 +22,7 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-2">
-              <button v-if="!state.active" type="button" class="btn btn-primary" :disabled="busy" @click="startCapture">
+              <button v-if="!state.active" type="button" class="btn btn-primary" :disabled="busy || loading" @click="startCapture">
                 <Icon name="play" size="sm" class="mr-1.5" />
                 {{ t('admin.gatewayAudit.start') }}
               </button>
@@ -30,7 +30,7 @@
                 <Icon name="x" size="sm" class="mr-1.5" />
                 {{ t('admin.gatewayAudit.stop') }}
               </button>
-              <button type="button" class="btn btn-danger" :disabled="busy || records.length === 0 || state.active" @click="clearCapture">
+              <button type="button" class="btn btn-danger" :disabled="busy || state.count === 0 || state.active" @click="clearCapture">
                 <Icon name="trash" size="sm" class="mr-1.5" />
                 {{ t('admin.gatewayAudit.clear') }}
               </button>
@@ -78,9 +78,19 @@
           </template>
         </DataTable>
       </template>
+      <template #pagination>
+        <Pagination
+          v-if="total > pageSize"
+          :total="total"
+          :page="page"
+          :page-size="pageSize"
+          :show-page-size-selector="false"
+          @update:page="changePage"
+        />
+      </template>
     </TablePageLayout>
 
-    <BaseDialog :show="detailVisible" :title="t('admin.gatewayAudit.detail.title')" width="wide" @close="detailVisible = false">
+    <BaseDialog :show="detailVisible" :title="t('admin.gatewayAudit.detail.title')" width="wide" @close="closeDetail">
       <div v-if="detail" class="space-y-5 py-2">
         <div class="grid grid-cols-1 gap-3 sm:grid-cols-4">
           <div class="rounded-xl bg-gray-50 p-3 dark:bg-dark-900"><div class="text-xs text-gray-400">{{ t('admin.gatewayAudit.detail.transport') }}</div><div class="mt-1 font-mono text-sm text-gray-900 dark:text-white">{{ detail.transport }}</div></div>
@@ -104,29 +114,48 @@
           <section><h3 class="mb-2 text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.gatewayAudit.detail.upstream') }} · {{ t('admin.gatewayAudit.detail.body') }}</h3><pre class="max-h-[32rem] min-h-40 overflow-auto rounded-xl bg-gray-950 p-4 font-mono text-xs leading-relaxed text-gray-100">{{ formatBody(detail.upstream_body, detail.upstream_body_codec) }}</pre><div v-if="detail.upstream_wire_body" class="mt-3"><div class="mb-1 text-xs font-semibold text-gray-500 dark:text-gray-400">{{ t('admin.gatewayAudit.detail.wireBody') }}</div><pre class="max-h-40 overflow-auto rounded-xl bg-gray-900 p-3 font-mono text-[11px] leading-relaxed text-gray-300">{{ formatBody(detail.upstream_wire_body, detail.upstream_wire_body_codec) }}</pre></div><div class="mt-2 break-all font-mono text-xs text-gray-500 dark:text-gray-400">{{ detail.upstream_method }} {{ detail.upstream_url }}</div></section>
         </div>
       </div>
+      <div v-else-if="detailFailed" role="alert" class="py-16 text-center text-sm text-red-600 dark:text-red-400">
+        {{ t('admin.gatewayAudit.detail.loadFailed') }}
+      </div>
       <div v-else class="flex items-center justify-center py-16 text-sm text-gray-500">{{ t('common.loading') }}</div>
     </BaseDialog>
   </AppLayout>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { adminAPI, type GatewayRequestAuditRecord, type GatewayRequestAuditState } from '@/api/admin'
+import {
+  adminAPI,
+  type GatewayRequestAuditRecord,
+  type GatewayRequestAuditState,
+  type GatewayRequestAuditSummary
+} from '@/api/admin'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import BaseDialog from '@/components/common/BaseDialog.vue'
+import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import type { Column } from '@/components/common/types'
+import { useAppStore } from '@/stores'
+import { DEFAULT_TABLE_PAGE_SIZE } from '@/utils/tablePreferences'
 
 const { t } = useI18n()
+const appStore = useAppStore()
+const auditAPI = adminAPI.gatewayRequestAudit
 const loading = ref(false)
 const busy = ref(false)
-const records = ref<GatewayRequestAuditRecord[]>([])
+const records = ref<GatewayRequestAuditSummary[]>([])
+const page = ref(1)
+const pageSize = DEFAULT_TABLE_PAGE_SIZE
+const total = ref(0)
 const detail = ref<GatewayRequestAuditRecord | null>(null)
 const detailVisible = ref(false)
+const detailFailed = ref(false)
 const state = ref<GatewayRequestAuditState>({ active: false, session_id: '', count: 0, bytes: 0 })
+let listRequest: AbortController | undefined
+let detailRequest: AbortController | undefined
 
 const columns = computed<Column[]>(() => [
   { key: 'captured_at', label: t('admin.gatewayAudit.columns.time') },
@@ -178,37 +207,121 @@ function formatBody(value?: string, codec?: string): string {
   try { return JSON.stringify(JSON.parse(value), null, 2) } catch { return value }
 }
 
-async function refresh() {
+async function refresh(targetPage = page.value) {
+  listRequest?.abort()
+  const request = new AbortController()
+  listRequest = request
   loading.value = true
   try {
-    const [nextState, nextRecords] = await Promise.all([adminAPI.gatewayRequestAudit.state(), adminAPI.gatewayRequestAudit.list()])
-    state.value = nextState
-    records.value = nextRecords
+    const [stateResult, listResult] = await Promise.allSettled([
+      auditAPI.state(request.signal).then((nextState) => {
+        if (!request.signal.aborted) state.value = nextState
+      }),
+      auditAPI.list(targetPage, pageSize, request.signal)
+    ])
+    if (request.signal.aborted) return
+    if (listResult.status === 'fulfilled') {
+      const result = listResult.value
+      if (result.total > 0 && targetPage > result.pages) {
+        await refresh(result.pages)
+        return
+      }
+      page.value = Math.min(targetPage, result.pages)
+      total.value = result.total
+      records.value = result.items
+    }
+    if (stateResult.status === 'rejected' || listResult.status === 'rejected') {
+      appStore.showError(t('admin.gatewayAudit.loadFailed'))
+    }
   } finally {
-    loading.value = false
+    if (listRequest === request) {
+      listRequest = undefined
+      loading.value = false
+    }
   }
+}
+
+function changePage(targetPage: number) {
+  if (!busy.value) void refresh(targetPage)
+}
+
+function cancelListRequest() {
+  listRequest?.abort()
+  listRequest = undefined
+  loading.value = false
+}
+
+function resetResults(nextState: GatewayRequestAuditState) {
+  state.value = nextState
+  page.value = 1
+  total.value = 0
+  records.value = []
+  closeDetail()
 }
 
 async function startCapture() {
   busy.value = true
-  try { state.value = await adminAPI.gatewayRequestAudit.start(); records.value = [] } finally { busy.value = false }
+  try {
+    resetResults(await auditAPI.start())
+  } catch {
+    appStore.showError(t('admin.gatewayAudit.startFailed'))
+  } finally {
+    busy.value = false
+  }
 }
 
 async function stopCapture() {
   busy.value = true
-  try { state.value = await adminAPI.gatewayRequestAudit.stop(); await refresh() } finally { busy.value = false }
+  cancelListRequest()
+  try {
+    state.value = await auditAPI.stop()
+    await refresh(1)
+  } catch {
+    appStore.showError(t('admin.gatewayAudit.stopFailed'))
+  } finally {
+    busy.value = false
+  }
 }
 
 async function clearCapture() {
   if (!window.confirm(t('admin.gatewayAudit.clearConfirm'))) return
   busy.value = true
-  try { await adminAPI.gatewayRequestAudit.clear(); detail.value = null; records.value = []; state.value = { active: false, session_id: '', count: 0, bytes: 0 } } finally { busy.value = false }
+  cancelListRequest()
+  try {
+    await auditAPI.clear()
+    resetResults({ active: false, session_id: '', count: 0, bytes: 0 })
+  } catch {
+    appStore.showError(t('admin.gatewayAudit.clearFailed'))
+  } finally {
+    busy.value = false
+  }
 }
 
 async function openDetail(id: string) {
+  detailRequest?.abort()
+  const request = new AbortController()
+  detailRequest = request
+  detail.value = null
+  detailFailed.value = false
   detailVisible.value = true
-  detail.value = await adminAPI.gatewayRequestAudit.get(id)
+  try {
+    const record = await auditAPI.get(id, request.signal)
+    if (!request.signal.aborted) detail.value = record
+  } catch {
+    if (!request.signal.aborted) detailFailed.value = true
+  }
 }
 
-onMounted(refresh)
+function closeDetail() {
+  detailRequest?.abort()
+  detailRequest = undefined
+  detailVisible.value = false
+  detail.value = null
+}
+
+onMounted(() => refresh(1))
+onUnmounted(() => {
+  cancelListRequest()
+  closeDetail()
+})
 </script>

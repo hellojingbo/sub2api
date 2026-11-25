@@ -11,11 +11,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/google/uuid"
 )
 
 // ErrGatewayRequestAuditActive indicates that a capture session is already running.
 var ErrGatewayRequestAuditActive = errors.New("gateway request audit capture is already active")
+
+var ErrGatewayRequestAuditRecordNotFound = infraerrors.NotFound("GATEWAY_REQUEST_AUDIT_RECORD_NOT_FOUND", "gateway request audit record not found")
 
 // GatewayRequestAuditState describes the manually controlled capture session.
 type GatewayRequestAuditState struct {
@@ -52,6 +55,28 @@ type GatewayRequestAuditRecord struct {
 	UpstreamWireCodec   string              `json:"upstream_wire_body_codec,omitempty"`
 }
 
+// GatewayRequestAuditSummary contains the fields shown in the capture table.
+type GatewayRequestAuditSummary struct {
+	ID               string    `json:"id"`
+	CapturedAt       time.Time `json:"captured_at"`
+	Transport        string    `json:"transport"`
+	AccountID        int64     `json:"account_id,omitempty"`
+	AccountName      string    `json:"account_name,omitempty"`
+	DownstreamMethod string    `json:"downstream_method"`
+	DownstreamURL    string    `json:"downstream_url"`
+	UpstreamMethod   string    `json:"upstream_method"`
+	UpstreamURL      string    `json:"upstream_url"`
+}
+
+func (r *GatewayRequestAuditRecord) Summary() GatewayRequestAuditSummary {
+	return GatewayRequestAuditSummary{
+		ID: r.ID, CapturedAt: r.CapturedAt, Transport: r.Transport,
+		AccountID: r.AccountID, AccountName: r.AccountName,
+		DownstreamMethod: r.DownstreamMethod, DownstreamURL: r.DownstreamURL,
+		UpstreamMethod: r.UpstreamMethod, UpstreamURL: r.UpstreamURL,
+	}
+}
+
 // GatewayRequestAuditDraft carries the downstream half until an upstream
 // request reaches its final transport boundary.
 type GatewayRequestAuditDraft struct {
@@ -74,7 +99,7 @@ type GatewayRequestAuditStore interface {
 	Clear(ctx context.Context) error
 	State(ctx context.Context) (*GatewayRequestAuditState, error)
 	Append(ctx context.Context, record *GatewayRequestAuditRecord) (bool, error)
-	List(ctx context.Context) ([]*GatewayRequestAuditRecord, error)
+	List(ctx context.Context, offset int64, limit int) ([]GatewayRequestAuditSummary, int64, error)
 	Get(ctx context.Context, id string) (*GatewayRequestAuditRecord, error)
 }
 
@@ -122,12 +147,12 @@ func (s *GatewayRequestAuditService) State(ctx context.Context) (*GatewayRequest
 	return s.store.State(ctx)
 }
 
-// List returns the current session's records, newest first.
-func (s *GatewayRequestAuditService) List(ctx context.Context) ([]*GatewayRequestAuditRecord, error) {
+// List returns one page of capture summaries, newest first.
+func (s *GatewayRequestAuditService) List(ctx context.Context, offset int64, limit int) ([]GatewayRequestAuditSummary, int64, error) {
 	if s == nil || s.store == nil {
-		return nil, errors.New("gateway request audit service unavailable")
+		return nil, 0, errors.New("gateway request audit service unavailable")
 	}
-	return s.store.List(ctx)
+	return s.store.List(ctx, offset, limit)
 }
 
 // Get returns one captured request pair.
